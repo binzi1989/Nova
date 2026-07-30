@@ -1,0 +1,72 @@
+{
+  "name": "nova-agentos-electron",
+  "version": "0.9.0-preview.29",
+  "private": true,
+  "author": "NOVA AgentOS Project",
+  "description": "NOVA AgentOS next-generation desktop shell",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && electron .\"",
+    "build:renderer": "vite build",
+    "build:bridge": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-bridge.ps1",
+    "build": "npm run build:renderer && npm run build:bridge",
+    "package:win": "npm run build && electron-builder --win dir",
+    "package:win:zip": "npm run build && electron-builder --win zip",
+    "smoke": "electron . --smoke",
+    "smoke:bridge": "node scripts/smoke-bridge.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "electron": "^42.0.0",
+    "electron-builder": "^26.0.12",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "ai.nova.agentos.electron",
+    "productName": "NOVA AgentOS",
+    "asar": true,
+    "directories": {
+      "output": "dist-electron",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bridge",
+        "to": "bridge",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "NOVA-AgentOS-Electron-${version}-${arch}.${ext}"
+    }
+  }
+}

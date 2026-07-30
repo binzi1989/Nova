@@ -1,0 +1,1289 @@
+<Window x:Class="NovaDesktop.ExtensionCenterWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NOVA 扩展中心"
+        Width="1040"
+        Height="700"
+        MinWidth="900"
+        MinHeight="620"
+        WindowStartupLocation="CenterOwner"
+        WindowStyle="None"
+        ResizeMode="CanResize"
+        AllowsTransparency="True"
+        Background="Transparent"
+        FontFamily="Microsoft YaHei UI, Segoe UI Variable Text, Segoe UI"
+        Foreground="#F2EFE8">
+    <Window.Resources>
+        <SolidColorBrush x:Key="PanelBrush" Color="#111815"/>
+        <SolidColorBrush x:Key="BorderBrush" Color="#33453F"/>
+        <SolidColorBrush x:Key="MutedBrush" Color="#87948D"/>
+        <Style TargetType="TextBox">
+            <Setter Property="Background" Value="#0D1311"/>
+            <Setter Property="Foreground" Value="#F2EFE8"/>
+            <Setter Property="BorderBrush" Value="#384B44"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,7"/>
+            <Setter Property="CaretBrush" Value="#78C8B6"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="Background" Value="#151C19"/>
+            <Setter Property="Foreground" Value="#F2EFE8"/>
+            <Setter Property="BorderBrush" Value="#384B44"/>
+            <Setter Property="Padding" Value="8,5"/>
+        </Style>
+        <Style TargetType="CheckBox">
+            <Setter Property="Foreground" Value="#CBD2CC"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="ActionButton" TargetType="Button">
+            <Setter Property="Background" Value="#18231F"/>
+            <Setter Property="Foreground" Value="#E3E7E1"/>
+            <Setter Property="BorderBrush" Value="#3C5149"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="13,8"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="RenderTransformOrigin" Value=".5,.5"/>
+            <Setter Property="RenderTransform">
+                <Setter.Value>
+                    <ScaleTransform/>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="#24332D"/>
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="#637D73"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Chrome" Property="Opacity" Value=".42"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <EventTrigger RoutedEvent="MouseEnter">
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                             To="1.018" Duration="0:0:0.14"/>
+                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                             To="1.018" Duration="0:0:0.14"/>
+                        </Storyboard>
+                    </BeginStoryboard>
+                </EventTrigger>
+                <EventTrigger RoutedEvent="MouseLeave">
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                             To="1" Duration="0:0:0.18"/>
+                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                             To="1" Duration="0:0:0.18"/>
+                        </Storyboard>
+                    </BeginStoryboard>
+                </EventTrigger>
+                <EventTrigger RoutedEvent="PreviewMouseLeftButtonDown">
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                             To=".982" Duration="0:0:0.07"/>
+                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                             To=".982" Duration="0:0:0.07"/>
+                        </Storyboard>
+                    </BeginStoryboard>
+                </EventTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource ActionButton}">
+            <Setter Property="Background" Value="#78C8B6"/>
+            <Setter Property="Foreground" Value="#09120F"/>
+            <Setter Property="BorderBrush" Value="#78C8B6"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+        <Style TargetType="ListBox">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+        <Style TargetType="ListBoxItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="ItemBorder"
+                                Background="#121A17"
+                                BorderBrush="#2E4039"
+                                BorderThickness="1"
+                                CornerRadius="10"
+                                Padding="12">
+                            <ContentPresenter Content="{TemplateBinding Content}"
+                                              ContentTemplate="{TemplateBinding ContentTemplate}"
+                                              ContentTemplateSelector="{TemplateBinding ContentTemplateSelector}"
+                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ItemBorder" Property="BorderBrush" Value="#50685F"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="ItemBorder" Property="Background" Value="#1A2924"/>
+                                <Setter TargetName="ItemBorder" Property="BorderBrush" Value="#78C8B6"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="TabItem">
+            <Setter Property="Foreground" Value="#8994AA"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="18,10"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="TabBorder"
+                                Background="Transparent"
+                                BorderBrush="Transparent"
+                                BorderThickness="0,0,0,2"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter Property="Foreground" Value="#78C8B6"/>
+                                <Setter TargetName="TabBorder" Property="BorderBrush" Value="#C45A45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border Background="#F30A0D0C"
+            BorderBrush="#3D514A"
+            BorderThickness="1"
+            CornerRadius="16">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="58"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Background="#D0101714" MouseLeftButtonDown="Header_MouseLeftButtonDown">
+                <StackPanel Orientation="Horizontal" Margin="20,0,0,0" VerticalAlignment="Center">
+                    <Border Width="30" Height="30" Background="#C45A45" CornerRadius="6">
+                        <TextBlock HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   FontFamily="FangSong, Microsoft YaHei UI"
+                                   FontSize="14"
+                                   FontWeight="Bold"
+                                   Foreground="#FFF5E8"
+                                   Text="器"/>
+                    </Border>
+                    <StackPanel Margin="11,0,0,0">
+                        <TextBlock FontSize="14" FontWeight="Bold" Text="能力器府"/>
+                        <TextBlock Margin="0,3,0,0"
+                                   FontSize="9.5"
+                                   Foreground="#778198"
+                                   Text="能力司南 · MCP 连接 · Skills 安装 · 权限由你掌握"/>
+                    </StackPanel>
+                </StackPanel>
+                <Button HorizontalAlignment="Right"
+                        Width="48"
+                        Background="Transparent"
+                        Foreground="#9AA5B9"
+                        BorderThickness="0"
+                        FontFamily="Segoe Fluent Icons"
+                        FontSize="13"
+                        Cursor="Hand"
+                        Click="Close_Click"
+                        Content="&#xE8BB;"/>
+            </Grid>
+
+            <TabControl x:Name="ExtensionTabs"
+                        Grid.Row="1"
+                        Margin="18,8,18,18"
+                        Background="Transparent"
+                        BorderThickness="0">
+                <TabItem x:Name="CompassTab" Header="能力司南" IsSelected="True">
+                    <Grid Margin="0,14,0,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="14"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="12"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Border Padding="18"
+                                Background="#121B18"
+                                BorderBrush="#3D554C"
+                                BorderThickness="1,1,1,3"
+                                CornerRadius="12">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Width="42"
+                                        Height="42"
+                                        Background="#C45A45"
+                                        CornerRadius="6">
+                                    <TextBlock HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               FontFamily="FangSong, Microsoft YaHei UI"
+                                               FontSize="18"
+                                               FontWeight="Bold"
+                                               Foreground="#FFF5E8"
+                                               Text="司"/>
+                                </Border>
+                                <StackPanel Grid.Column="1" Margin="14,0,18,0">
+                                    <TextBlock FontSize="16"
+                                               FontWeight="Bold"
+                                               Foreground="#F2EFE8"
+                                               Text="先看任务，再配能力"/>
+                                    <TextBlock Margin="0,6,0,0"
+                                               FontSize="10"
+                                               LineHeight="17"
+                                               Foreground="#9CA9A2"
+                                               TextWrapping="Wrap"
+                                               Text="NOVA 会判断任务缺什么，只推荐相关 MCP 与 Skill。停用、安装、扫描、测试和外部调用都不会静默发生。"/>
+                                </StackPanel>
+                                <Button Grid.Column="2"
+                                        Style="{StaticResource PrimaryButton}"
+                                        Margin="0"
+                                        Click="AnalyzeCapabilities_Click"
+                                        Content="重新研判"/>
+                            </Grid>
+                        </Border>
+
+                        <Grid Grid.Row="2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="310"/>
+                                <ColumnDefinition Width="14"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <Border Padding="16"
+                                    Background="{StaticResource PanelBrush}"
+                                    BorderBrush="{StaticResource BorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="12">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+                                    <TextBlock FontSize="12"
+                                               FontWeight="SemiBold"
+                                               Text="这次想做成什么"/>
+                                    <TextBox x:Name="CapabilityIntentBox"
+                                             Grid.Row="1"
+                                             Height="92"
+                                             Margin="0,10,0,0"
+                                             Padding="10,8"
+                                             AcceptsReturn="True"
+                                             TextWrapping="Wrap"
+                                             VerticalContentAlignment="Top"
+                                             VerticalScrollBarVisibility="Auto"/>
+                                    <TextBlock Grid.Row="2"
+                                               Margin="0,9,0,0"
+                                               FontSize="9"
+                                               Foreground="#75847D"
+                                               TextWrapping="Wrap"
+                                               Text="默认使用当前输入或所选任务目标。你也可以在这里临时改写，不会修改任务本身。"/>
+                                    <StackPanel Grid.Row="3" Margin="0,20,0,0">
+                                        <Border Padding="11,9"
+                                                Background="#16231F"
+                                                BorderBrush="#334B42"
+                                                BorderThickness="1"
+                                                CornerRadius="8">
+                                            <StackPanel>
+                                                <TextBlock FontSize="8.5" Foreground="#778B82" Text="工作区信号"/>
+                                                <TextBlock x:Name="CompassWorkspaceText"
+                                                           Margin="0,4,0,0"
+                                                           FontSize="10.5"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="#C5CEC8"
+                                                           TextWrapping="Wrap"
+                                                           Text="正在观察…"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <Grid Margin="0,10,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="8"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Border Padding="10,9"
+                                                    Background="#172720"
+                                                    CornerRadius="8">
+                                                <StackPanel>
+                                                    <TextBlock FontSize="8.5" Foreground="#789080" Text="已经就绪"/>
+                                                    <TextBlock x:Name="CompassReadyText"
+                                                               Margin="0,3,0,0"
+                                                               FontSize="18"
+                                                               FontWeight="Bold"
+                                                               Foreground="#78C8B6"
+                                                               Text="0"/>
+                                                </StackPanel>
+                                            </Border>
+                                            <Border Grid.Column="2"
+                                                    Padding="10,9"
+                                                    Background="#2A2117"
+                                                    CornerRadius="8">
+                                                <StackPanel>
+                                                    <TextBlock FontSize="8.5" Foreground="#9A8565" Text="等你确认"/>
+                                                    <TextBlock x:Name="CompassSuggestedText"
+                                                               Margin="0,3,0,0"
+                                                               FontSize="18"
+                                                               FontWeight="Bold"
+                                                               Foreground="#D7B36B"
+                                                               Text="0"/>
+                                                </StackPanel>
+                                            </Border>
+                                        </Grid>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <Border Grid.Column="2"
+                                    Padding="14"
+                                    Background="{StaticResource PanelBrush}"
+                                    BorderBrush="{StaticResource BorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="12">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+                                    <Grid>
+                                        <StackPanel>
+                                            <TextBlock FontSize="12.5"
+                                                       FontWeight="SemiBold"
+                                                       Text="最小能力阵"/>
+                                            <TextBlock x:Name="CompassSummaryText"
+                                                       Margin="0,4,0,0"
+                                                       FontSize="9.5"
+                                                       Foreground="#829188"
+                                                       Text="正在研判任务能力…"/>
+                                        </StackPanel>
+                                        <Border HorizontalAlignment="Right"
+                                                Padding="8,4"
+                                                Background="#39231E"
+                                                BorderBrush="#6D4035"
+                                                BorderThickness="1"
+                                                CornerRadius="6">
+                                            <TextBlock FontSize="8.5"
+                                                       FontWeight="Bold"
+                                                       Foreground="#E5B39F"
+                                                       Text="只挂所需"/>
+                                        </Border>
+                                    </Grid>
+                                    <ListBox x:Name="CapabilityList"
+                                             Grid.Row="1"
+                                             Margin="0,13,0,0"
+                                             ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="5"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Background="{Binding Accent}" CornerRadius="3"/>
+                                                    <StackPanel Grid.Column="1" Margin="12,0,16,0">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock FontSize="11.5"
+                                                                       FontWeight="Bold"
+                                                                       Foreground="#EDF0EA"
+                                                                       Text="{Binding Name}"/>
+                                                            <Border Margin="8,0,0,0"
+                                                                    Padding="6,2"
+                                                                    Background="#1C2723"
+                                                                    CornerRadius="5">
+                                                                <TextBlock FontSize="8"
+                                                                           Foreground="#8DA198"
+                                                                           Text="{Binding SourceLabel}"/>
+                                                            </Border>
+                                                            <TextBlock Margin="9,1,0,0"
+                                                                       FontSize="8.5"
+                                                                       Foreground="#71817A"
+                                                                       Text="{Binding Confidence, StringFormat={}匹配 {0}%}"/>
+                                                        </StackPanel>
+                                                        <TextBlock Margin="0,6,0,0"
+                                                                   FontSize="9.5"
+                                                                   Foreground="#A5AFA9"
+                                                                   TextWrapping="Wrap"
+                                                                   Text="{Binding Reason}"/>
+                                                        <TextBlock Margin="0,5,0,0"
+                                                                   FontSize="8.5"
+                                                                   Foreground="#72817A"
+                                                                   TextWrapping="Wrap"
+                                                                   Text="{Binding PermissionSummary}"/>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="2"
+                                                                MinWidth="108"
+                                                                VerticalAlignment="Center">
+                                                        <TextBlock HorizontalAlignment="Center"
+                                                                   FontSize="8"
+                                                                   Foreground="#8A958F"
+                                                                   Text="{Binding RiskLabel}"/>
+                                                        <Button Margin="0,7,0,0"
+                                                                Padding="10,6"
+                                                                Style="{StaticResource ActionButton}"
+                                                                Tag="{Binding}"
+                                                                Click="CapabilityAction_Click"
+                                                                Content="{Binding ActionLabel}"/>
+                                                    </StackPanel>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Grid>
+                            </Border>
+                        </Grid>
+
+                        <Border Grid.Row="4"
+                                Padding="11,8"
+                                Background="#101815"
+                                BorderBrush="#2E423A"
+                                BorderThickness="1"
+                                CornerRadius="8">
+                            <TextBlock x:Name="CompassStatusText"
+                                       FontSize="9.5"
+                                       Foreground="#83938B"
+                                       TextWrapping="Wrap"
+                                       Text="能力司南只给建议；任何扩展状态变化都要由你确认。"/>
+                        </Border>
+                    </Grid>
+                </TabItem>
+
+                <TabItem x:Name="MarketplaceTab" Header="能力集市">
+                    <Grid Margin="0,14,0,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="14"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="12"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Border Padding="18"
+                                Background="#151B17"
+                                BorderBrush="#4A5544"
+                                BorderThickness="1,1,1,3"
+                                CornerRadius="12">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="300"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Width="42"
+                                        Height="42"
+                                        Background="#9E3F32"
+                                        CornerRadius="6">
+                                    <TextBlock HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               FontFamily="FangSong, Microsoft YaHei UI"
+                                               FontSize="18"
+                                               FontWeight="Bold"
+                                               Foreground="#FFF6E9"
+                                               Text="集"/>
+                                </Border>
+                                <StackPanel Grid.Column="1" Margin="14,0,18,0">
+                                    <TextBlock FontSize="16"
+                                               FontWeight="Bold"
+                                               Text="MCP 与 Skills 能力集市"/>
+                                    <TextBlock Margin="0,5,0,0"
+                                               FontSize="9.5"
+                                               Foreground="#97A39C"
+                                               Text="先审来源与权限，再一键加载；登记、启用、真实调用彼此独立。"/>
+                                </StackPanel>
+                                <TextBox x:Name="MarketplaceSearchBox"
+                                         Grid.Column="2"
+                                         Margin="0,2,10,2"
+                                         TextChanged="MarketplaceFilter_Changed"
+                                         ToolTip="按名称、类别、发布者或用途筛选"/>
+                                <Button Grid.Column="3"
+                                        Margin="0"
+                                        Style="{StaticResource ActionButton}"
+                                        Click="RefreshMarketplace_Click"
+                                        Content="刷新状态"/>
+                            </Grid>
+                        </Border>
+
+                        <Grid Grid.Row="2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="220"/>
+                                <ColumnDefinition Width="14"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <Border Padding="15"
+                                    Background="{StaticResource PanelBrush}"
+                                    BorderBrush="{StaticResource BorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="12">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <TextBlock FontSize="12"
+                                               FontWeight="Bold"
+                                               Text="按任务挑能力"/>
+                                    <TextBlock Grid.Row="1"
+                                               Margin="0,6,0,0"
+                                               FontSize="9"
+                                               LineHeight="15"
+                                               Foreground="#829087"
+                                               TextWrapping="Wrap"
+                                               Text="官方连接与 NOVA 内置 Skills 分开标记，不混淆“官方源”和“已验证可用”。"/>
+                                    <TextBlock Grid.Row="2"
+                                               Margin="0,17,0,6"
+                                               FontSize="8.5"
+                                               Foreground="#78867E"
+                                               Text="能力类型"/>
+                                    <ComboBox x:Name="MarketplaceKindBox"
+                                              Grid.Row="3"
+                                              SelectionChanged="MarketplaceFilter_Changed">
+                                        <ComboBoxItem Content="全部能力"/>
+                                        <ComboBoxItem Content="只看 MCP"/>
+                                        <ComboBoxItem Content="只看 Skills"/>
+                                    </ComboBox>
+                                    <StackPanel Grid.Row="4" Margin="0,18,0,0">
+                                        <Border Padding="11,9"
+                                                Background="#17241F"
+                                                BorderBrush="#344C42"
+                                                BorderThickness="1"
+                                                CornerRadius="8">
+                                            <StackPanel>
+                                                <TextBlock FontSize="8.5"
+                                                           Foreground="#799086"
+                                                           Text="当前可见"/>
+                                                <TextBlock x:Name="MarketplaceVisibleText"
+                                                           Margin="0,4,0,0"
+                                                           FontSize="20"
+                                                           FontWeight="Bold"
+                                                           Foreground="#78C8B6"
+                                                           Text="0"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Margin="0,9,0,0"
+                                                Padding="11,9"
+                                                Background="#282118"
+                                                BorderBrush="#514630"
+                                                BorderThickness="1"
+                                                CornerRadius="8">
+                                            <StackPanel>
+                                                <TextBlock FontSize="8.5"
+                                                           Foreground="#9B8B6B"
+                                                           Text="已加载"/>
+                                                <TextBlock x:Name="MarketplaceLoadedText"
+                                                           Margin="0,4,0,0"
+                                                           FontSize="20"
+                                                           FontWeight="Bold"
+                                                           Foreground="#D7B36B"
+                                                           Text="0"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
+                                    <TextBlock Grid.Row="5"
+                                               FontSize="8.5"
+                                               LineHeight="14"
+                                               Foreground="#6F7F77"
+                                               TextWrapping="Wrap"
+                                               Text="真实连接、下载、联网、文件写入与账号操作，仍由执行流逐次说明并授权。"/>
+                                </Grid>
+                            </Border>
+
+                            <Border Grid.Column="2"
+                                    Padding="14"
+                                    Background="{StaticResource PanelBrush}"
+                                    BorderBrush="{StaticResource BorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="12">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+                                    <Grid>
+                                        <StackPanel>
+                                            <TextBlock FontSize="12.5"
+                                                       FontWeight="SemiBold"
+                                                       Text="可信能力架"/>
+                                            <TextBlock Margin="0,4,0,0"
+                                                       FontSize="9"
+                                                       Foreground="#7E8D85"
+                                                       Text="来源、风险、前置条件和权限影响都在卡片上，不用猜。"/>
+                                        </StackPanel>
+                                        <Border HorizontalAlignment="Right"
+                                                Padding="8,4"
+                                                Background="#34251E"
+                                                BorderBrush="#68483B"
+                                                BorderThickness="1"
+                                                CornerRadius="6">
+                                            <TextBlock FontSize="8.5"
+                                                       Foreground="#E2B09E"
+                                                       Text="由你掌印"/>
+                                        </Border>
+                                    </Grid>
+                                    <ListBox x:Name="MarketplaceList"
+                                             Grid.Row="1"
+                                             Margin="0,13,0,0"
+                                             ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="5"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="138"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Background="{Binding Accent}" CornerRadius="3"/>
+                                                    <StackPanel Grid.Column="1" Margin="12,0,18,0">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock FontSize="11.5"
+                                                                       FontWeight="Bold"
+                                                                       Foreground="#F0F1EC"
+                                                                       Text="{Binding Name}"/>
+                                                            <Border Margin="8,0,0,0"
+                                                                    Padding="6,2"
+                                                                    Background="#202A25"
+                                                                    CornerRadius="5">
+                                                                <TextBlock FontSize="8"
+                                                                           Foreground="#93A49B"
+                                                                           Text="{Binding KindLabel}"/>
+                                                            </Border>
+                                                            <TextBlock Margin="8,1,0,0"
+                                                                       FontSize="8.5"
+                                                                       Foreground="#7E8B84"
+                                                                       Text="{Binding Publisher}"/>
+                                                        </StackPanel>
+                                                        <TextBlock Margin="0,6,0,0"
+                                                                   FontSize="9.5"
+                                                                   LineHeight="15"
+                                                                   Foreground="#ACB5AF"
+                                                                   TextWrapping="Wrap"
+                                                                   Text="{Binding Description}"/>
+                                                        <WrapPanel Margin="0,7,0,0">
+                                                            <Border Margin="0,0,7,0"
+                                                                    Padding="6,3"
+                                                                    Background="#172820"
+                                                                    CornerRadius="5">
+                                                                <TextBlock FontSize="8"
+                                                                           Foreground="#7EC4A8"
+                                                                           Text="{Binding TrustLabel}"/>
+                                                            </Border>
+                                                            <Border Margin="0,0,7,0"
+                                                                    Padding="6,3"
+                                                                    Background="#2D221B"
+                                                                    CornerRadius="5">
+                                                                <TextBlock FontSize="8"
+                                                                           Foreground="#D6AB74"
+                                                                           Text="{Binding RiskLabel}"/>
+                                                            </Border>
+                                                            <TextBlock Margin="0,2,0,0"
+                                                                       FontSize="8"
+                                                                       Foreground="#73827A"
+                                                                       Text="{Binding Category}"/>
+                                                        </WrapPanel>
+                                                        <TextBlock Margin="0,6,0,0"
+                                                                   FontSize="8.3"
+                                                                   Foreground="#7E8C84"
+                                                                   TextWrapping="Wrap"
+                                                                   Text="{Binding PermissionSummary}"/>
+                                                        <TextBlock Margin="0,4,0,0"
+                                                                   FontSize="8.2"
+                                                                   FontFamily="Cascadia Mono, Consolas"
+                                                                   Foreground="#697970"
+                                                                   TextWrapping="Wrap"
+                                                                   Text="{Binding Requirements, StringFormat={}前置：{0}}"/>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="2"
+                                                                VerticalAlignment="Center">
+                                                        <TextBlock HorizontalAlignment="Center"
+                                                                   FontSize="8.5"
+                                                                   FontWeight="SemiBold"
+                                                                   Foreground="#9AABA1"
+                                                                   Text="{Binding StateLabel}"/>
+                                                        <Button Margin="0,8,0,0"
+                                                                Style="{StaticResource ActionButton}"
+                                                                Tag="{Binding}"
+                                                                Click="MarketplaceLoad_Click"
+                                                                Content="{Binding ActionLabel}"/>
+                                                    </StackPanel>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Grid>
+                            </Border>
+                        </Grid>
+
+                        <Border Grid.Row="4"
+                                Padding="11,8"
+                                Background="#101815"
+                                BorderBrush="#2E423A"
+                                BorderThickness="1"
+                                CornerRadius="8">
+                            <TextBlock x:Name="MarketplaceStatusText"
+                                       FontSize="9.5"
+                                       Foreground="#83938B"
+                                       TextWrapping="Wrap"
+                                       Text="能力集市不会静默启动任何 MCP；你可以先登记，准备好环境后再启用。"/>
+                        </Border>
+                    </Grid>
+                </TabItem>
+
+                <TabItem x:Name="DiscoveryTab" Header="发现与导入">
+                    <Grid Margin="0,14,0,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="14"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="14"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Border Background="#101824"
+                                BorderBrush="#33415A"
+                                BorderThickness="1"
+                                CornerRadius="12"
+                                Padding="18">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock FontSize="15"
+                                               FontWeight="SemiBold"
+                                               Text="把已有 MCP 带进 NOVA"/>
+                                    <TextBlock Margin="0,7,0,0"
+                                               MaxWidth="650"
+                                               FontSize="10"
+                                               LineHeight="17"
+                                               Foreground="#8794AA"
+                                               TextWrapping="Wrap"
+                                               Text="扫描当前工作区、Claude、Cursor、Windsurf 与 Codex 的本机配置。扫描只读取你确认的文件，不启动进程、不访问网络、不复制明文密钥。"/>
+                                    <StackPanel Margin="0,13,0,0" Orientation="Horizontal">
+                                        <Border Padding="8,4" Background="#16293A" CornerRadius="6">
+                                            <TextBlock FontSize="9" Foreground="#75F0FF" Text="1 只读扫描"/>
+                                        </Border>
+                                        <TextBlock Margin="9,0" VerticalAlignment="Center" Foreground="#526078" Text="→"/>
+                                        <Border Padding="8,4" Background="#1C2335" CornerRadius="6">
+                                            <TextBlock FontSize="9" Foreground="#AEB9CD" Text="2 逐项复核"/>
+                                        </Border>
+                                        <TextBlock Margin="9,0" VerticalAlignment="Center" Foreground="#526078" Text="→"/>
+                                        <Border Padding="8,4" Background="#1C2335" CornerRadius="6">
+                                            <TextBlock FontSize="9" Foreground="#AEB9CD" Text="3 授权导入（保持停用）"/>
+                                        </Border>
+                                    </StackPanel>
+                                </StackPanel>
+                                <Button Grid.Column="1"
+                                        MinWidth="142"
+                                        Margin="20,0,0,0"
+                                        VerticalAlignment="Center"
+                                        Style="{StaticResource PrimaryButton}"
+                                        Click="DiscoverMcp_Click"
+                                        Content="扫描本机配置"/>
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Row="2"
+                                Background="{StaticResource PanelBrush}"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="12"
+                                Padding="14">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                <Grid>
+                                    <StackPanel>
+                                        <TextBlock FontSize="12.5" FontWeight="SemiBold" Text="可导入连接"/>
+                                        <TextBlock x:Name="DiscoveryCountText"
+                                                   Margin="0,4,0,0"
+                                                   FontSize="9.5"
+                                                   Foreground="{StaticResource MutedBrush}"
+                                                   Text="尚未扫描；NOVA 不会在后台自动读取其他应用配置"/>
+                                    </StackPanel>
+                                    <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                                        <Button Style="{StaticResource ActionButton}"
+                                                Click="SelectSafeDiscoveries_Click"
+                                                Content="选择低风险项"/>
+                                        <Button x:Name="ImportDiscoveredButton"
+                                                Style="{StaticResource PrimaryButton}"
+                                                Margin="0"
+                                                IsEnabled="False"
+                                                Click="ImportDiscoveries_Click"
+                                                Content="授权导入所选"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <ListBox x:Name="DiscoveryList"
+                                         Grid.Row="1"
+                                         Margin="0,14,0,0"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <CheckBox Margin="0,2,12,0"
+                                                          VerticalAlignment="Top"
+                                                          IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                          IsEnabled="{Binding Candidate.CanImport}"
+                                                          Checked="DiscoverySelectionChanged"
+                                                          Unchecked="DiscoverySelectionChanged"/>
+                                                <StackPanel Grid.Column="1">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock FontSize="11.5"
+                                                                   FontWeight="SemiBold"
+                                                                   Text="{Binding Candidate.Name}"/>
+                                                        <TextBlock Margin="9,1,0,0"
+                                                                   FontSize="9"
+                                                                   Foreground="#7F8DA5"
+                                                                   Text="{Binding Candidate.SourceProduct}"/>
+                                                    </StackPanel>
+                                                    <TextBlock Margin="0,5,0,0"
+                                                               FontFamily="Cascadia Mono, Consolas"
+                                                               FontSize="9.5"
+                                                               Foreground="#9AA7BB"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               Text="{Binding Candidate.Summary}"/>
+                                                    <TextBlock Margin="0,6,0,0"
+                                                               FontSize="9"
+                                                               Foreground="#6F7D94"
+                                                               TextWrapping="Wrap"
+                                                               Text="{Binding Candidate.Notes}"/>
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="2"
+                                                            Margin="14,0,0,0"
+                                                            VerticalAlignment="Center">
+                                                    <Border Padding="8,4"
+                                                            Background="#192638"
+                                                            CornerRadius="6">
+                                                        <TextBlock FontSize="9"
+                                                                   Foreground="#75F0FF"
+                                                                   Text="{Binding Candidate.RiskLabel}"/>
+                                                    </Border>
+                                                    <TextBlock Margin="0,6,0,0"
+                                                               HorizontalAlignment="Center"
+                                                               FontSize="8"
+                                                               Foreground="#657188"
+                                                               Text="{Binding Candidate.Registration.Transport}"/>
+                                                </StackPanel>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Row="4"
+                                Padding="12"
+                                Background="#0D121B"
+                                BorderBrush="#242E41"
+                                BorderThickness="1"
+                                CornerRadius="8">
+                            <Grid>
+                                <TextBlock x:Name="DiscoveryStatusText"
+                                           Margin="0,0,180,0"
+                                           FontSize="9.5"
+                                           Foreground="#8290A8"
+                                           TextWrapping="Wrap"
+                                           Text="导入只创建停用的绑定。之后测试连接或启用时，NOVA 会再次说明将启动什么，并请求你的许可。"/>
+                                <Button HorizontalAlignment="Right"
+                                        Style="{StaticResource ActionButton}"
+                                        Margin="0"
+                                        Click="OpenManualMcp_Click"
+                                        Content="改为手动配置"/>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </TabItem>
+
+                <TabItem x:Name="ManualMcpTab" Header="MCP 连接">
+                    <Grid Margin="0,14,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="310"/>
+                            <ColumnDefinition Width="14"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0"
+                                Background="{StaticResource PanelBrush}"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="12"
+                                Padding="14">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <Grid>
+                                    <StackPanel>
+                                        <TextBlock FontSize="12.5" FontWeight="SemiBold" Text="已注册 Server"/>
+                                        <TextBlock Margin="0,4,0,0" FontSize="9.5" Foreground="{StaticResource MutedBrush}" Text="stdio / Streamable HTTP"/>
+                                    </StackPanel>
+                                    <Button HorizontalAlignment="Right"
+                                            Style="{StaticResource ActionButton}"
+                                            Margin="0"
+                                            Click="NewMcp_Click"
+                                            Content="+ 新建"/>
+                                </Grid>
+                                <ListBox x:Name="McpList"
+                                         Grid.Row="1"
+                                         Margin="0,14,0,8"
+                                         SelectionChanged="McpList_SelectionChanged">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock FontSize="11.5" FontWeight="SemiBold" Text="{Binding Name}"/>
+                                                    <TextBlock Margin="0,5,0,0"
+                                                               FontSize="9.5"
+                                                               Foreground="#758097"
+                                                               Text="{Binding Transport}"/>
+                                                </StackPanel>
+                                                <Border Grid.Column="1"
+                                                        Padding="7,3"
+                                                        Background="#18263A"
+                                                        CornerRadius="6"
+                                                        VerticalAlignment="Center">
+                                                    <TextBlock FontSize="8.5" Foreground="#75F0FF" Text="{Binding Enabled, StringFormat={}启用 {0}}"/>
+                                                </Border>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <TextBlock Grid.Row="2"
+                                           FontSize="9"
+                                           Foreground="#667187"
+                                           TextWrapping="Wrap"
+                                           Text="密钥只填写环境变量名，NOVA 不会把密钥明文写入 MCP 配置。"/>
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Column="2"
+                                Background="{StaticResource PanelBrush}"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="12"
+                                Padding="18">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="16"/>
+                                            <ColumnDefinition Width="190"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock FontSize="10" Foreground="{StaticResource MutedBrush}" Text="SERVER 名称"/>
+                                            <TextBox x:Name="McpNameBox" Margin="0,6,0,0"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock FontSize="10" Foreground="{StaticResource MutedBrush}" Text="传输协议"/>
+                                            <ComboBox x:Name="McpTransportBox" Margin="0,6,0,0" SelectionChanged="McpTransportBox_SelectionChanged">
+                                                <ComboBoxItem Content="stdio"/>
+                                                <ComboBoxItem Content="http"/>
+                                            </ComboBox>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <Grid Grid.Row="1" Margin="0,14,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="16"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock FontSize="10" Foreground="{StaticResource MutedBrush}" Text="STDIO 命令"/>
+                                            <TextBox x:Name="McpCommandBox" Margin="0,6,0,0"/>
+                                            <TextBlock Margin="0,4,0,0" FontSize="8.5" Foreground="#5F6A80" Text="例如 npx、uvx、dotnet"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock FontSize="10" Foreground="{StaticResource MutedBrush}" Text="HTTP URL"/>
+                                            <TextBox x:Name="McpUrlBox" Margin="0,6,0,0"/>
+                                            <TextBlock Margin="0,4,0,0" FontSize="8.5" Foreground="#5F6A80" Text="仅 HTTPS 或本机 HTTP"/>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <StackPanel Grid.Row="2" Margin="0,14,0,0">
+                                        <TextBlock FontSize="10" Foreground="{StaticResource MutedBrush}" Text="参数（每行一个）"/>
+                                        <TextBox x:Name="McpArgumentsBox"
+                                                 Margin="0,6,0,0"
+                                                 Height="72"
+                                                 AcceptsReturn="True"
+                                                 VerticalContentAlignment="Top"
+                                                 VerticalScrollBarVisibility="Auto"/>
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Row="3" Margin="0,14,0,0">
+                                        <TextBlock FontSize="10" Foreground="{StaticResource MutedBrush}" Text="工作目录（留空时使用当前工作区）"/>
+                                        <TextBox x:Name="McpWorkingDirectoryBox" Margin="0,6,0,0"/>
+                                    </StackPanel>
+
+                                    <Grid Grid.Row="4" Margin="0,14,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="16"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock FontSize="10" Foreground="{StaticResource MutedBrush}" Text="环境变量映射"/>
+                                            <TextBox x:Name="McpEnvironmentBox"
+                                                     Margin="0,6,0,0"
+                                                     Height="70"
+                                                     AcceptsReturn="True"
+                                                     VerticalContentAlignment="Top"/>
+                                            <TextBlock Margin="0,4,0,0" FontSize="8.5" Foreground="#5F6A80" Text="目标变量=来源环境变量"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock FontSize="10" Foreground="{StaticResource MutedBrush}" Text="HTTP Header 映射"/>
+                                            <TextBox x:Name="McpHeadersBox"
+                                                     Margin="0,6,0,0"
+                                                     Height="70"
+                                                     AcceptsReturn="True"
+                                                     VerticalContentAlignment="Top"/>
+                                            <TextBlock Margin="0,4,0,0" FontSize="8.5" Foreground="#5F6A80" Text="Authorization=来源环境变量"/>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <Grid Grid.Row="5" Margin="0,17,0,0">
+                                        <CheckBox x:Name="McpEnabledBox" Content="保存后立即启用"/>
+                                        <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                                            <Button Style="{StaticResource ActionButton}" Click="DeleteMcp_Click" Content="删除"/>
+                                            <Button Style="{StaticResource ActionButton}" Click="TestMcp_Click" Content="测试连接"/>
+                                            <Button Style="{StaticResource PrimaryButton}" Margin="0" Click="SaveMcp_Click" Content="保存绑定"/>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <Border Grid.Row="6"
+                                            Margin="0,16,0,0"
+                                            Padding="11"
+                                            Background="#0D121B"
+                                            BorderBrush="#242E41"
+                                            BorderThickness="1"
+                                            CornerRadius="8">
+                                        <TextBlock x:Name="McpStatusText"
+                                                   FontSize="9.5"
+                                                   Foreground="#8290A8"
+                                                   TextWrapping="Wrap"
+                                                   Text="选择一个 Server，或创建新的 MCP 绑定。"/>
+                                    </Border>
+                                </Grid>
+                            </ScrollViewer>
+                        </Border>
+                    </Grid>
+                </TabItem>
+
+                <TabItem x:Name="SkillsTab" Header="Skills">
+                    <Grid Margin="0,14,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="380"/>
+                            <ColumnDefinition Width="14"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0"
+                                Background="{StaticResource PanelBrush}"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="12"
+                                Padding="14">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                <Grid>
+                                    <StackPanel>
+                                        <TextBlock FontSize="12.5" FontWeight="SemiBold" Text="本地 Skills"/>
+                                        <TextBlock Margin="0,4,0,0" FontSize="9.5" Foreground="{StaticResource MutedBrush}" Text="安装前进行结构与安全审查"/>
+                                    </StackPanel>
+                                    <Button HorizontalAlignment="Right"
+                                            Style="{StaticResource PrimaryButton}"
+                                            Margin="0"
+                                            Click="InstallSkill_Click"
+                                            Content="+ 从文件夹安装"/>
+                                </Grid>
+                                <ListBox x:Name="SkillList"
+                                         Grid.Row="1"
+                                         Margin="0,14,0,0"
+                                         SelectionChanged="SkillList_SelectionChanged">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock FontSize="11.5" FontWeight="SemiBold" Text="{Binding Name}"/>
+                                                    <TextBlock Margin="0,5,0,0"
+                                                               MaxWidth="260"
+                                                               FontSize="9.5"
+                                                               Foreground="#758097"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               Text="{Binding Description}"/>
+                                                </StackPanel>
+                                                <Ellipse Grid.Column="1"
+                                                         Width="7"
+                                                         Height="7"
+                                                         Margin="8,0,0,0"
+                                                         Fill="#6BE5A9"
+                                                         VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Column="2"
+                                Background="{StaticResource PanelBrush}"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="12"
+                                Padding="22">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <StackPanel>
+                                    <TextBlock x:Name="SkillNameText" FontSize="20" FontWeight="SemiBold" Text="选择一个 Skill"/>
+                                    <TextBlock x:Name="SkillDescriptionText"
+                                               Margin="0,8,0,0"
+                                               FontSize="11"
+                                               Foreground="#8C98AE"
+                                               TextWrapping="Wrap"
+                                               Text="Skill 会为 Agent 提供特定任务的执行说明。"/>
+                                </StackPanel>
+                                <WrapPanel Grid.Row="1" Margin="0,20,0,0">
+                                    <Border Background="#152235" CornerRadius="7" Padding="9,5" Margin="0,0,8,0">
+                                        <TextBlock x:Name="SkillStateText" FontSize="9.5" Foreground="#75F0FF" Text="未选择"/>
+                                    </Border>
+                                    <Border Background="#171D29" CornerRadius="7" Padding="9,5" Margin="0,0,8,0">
+                                        <TextBlock x:Name="SkillFilesText" FontSize="9.5" Foreground="#9AA5B9" Text="0 files"/>
+                                    </Border>
+                                    <Border Background="#171D29" CornerRadius="7" Padding="9,5">
+                                        <TextBlock x:Name="SkillSizeText" FontSize="9.5" Foreground="#9AA5B9" Text="0 KB"/>
+                                    </Border>
+                                </WrapPanel>
+                                <StackPanel Grid.Row="2" Margin="0,22,0,0">
+                                    <TextBlock FontSize="9.5" Foreground="#687389" Text="安装目录"/>
+                                    <TextBlock x:Name="SkillPathText"
+                                               Margin="0,6,0,0"
+                                               FontFamily="Cascadia Mono, Consolas"
+                                               FontSize="9.5"
+                                               Foreground="#9EA9BC"
+                                               TextWrapping="Wrap"
+                                               Text="—"/>
+                                </StackPanel>
+                                <Border Grid.Row="3"
+                                        Margin="0,24,0,0"
+                                        Background="#0D121B"
+                                        BorderBrush="#242E41"
+                                        BorderThickness="1"
+                                        CornerRadius="10"
+                                        Padding="16">
+                                    <StackPanel>
+                                        <TextBlock FontSize="11" FontWeight="SemiBold" Text="安全边界"/>
+                                        <TextBlock Margin="0,10,0,0"
+                                                   FontSize="10"
+                                                   LineHeight="18"
+                                                   Foreground="#7D899F"
+                                                   TextWrapping="Wrap"
+                                                   Text="• 只复制选定文件夹，不自动执行安装脚本&#x0a;• 阻止可执行文件、动态库、快捷方式与符号链接&#x0a;• 最多 500 个文件、25 MB&#x0a;• Skill 指令不能绕过工具审批、工作区边界或 PC 安全策略"/>
+                                    </StackPanel>
+                                </Border>
+                                <Grid Grid.Row="4" Margin="0,18,0,0">
+                                    <TextBlock x:Name="SkillStatusText"
+                                               MaxWidth="330"
+                                               VerticalAlignment="Center"
+                                               FontSize="9.5"
+                                               Foreground="#78849A"
+                                               TextWrapping="Wrap"
+                                               Text="选择包含 SKILL.md 的本地文件夹开始安装。"/>
+                                    <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                                        <Button x:Name="ToggleSkillButton"
+                                                Style="{StaticResource ActionButton}"
+                                                Click="ToggleSkill_Click"
+                                                IsEnabled="False"
+                                                Content="停用"/>
+                                        <Button x:Name="UninstallSkillButton"
+                                                Style="{StaticResource ActionButton}"
+                                                Margin="0"
+                                                Click="UninstallSkill_Click"
+                                                IsEnabled="False"
+                                                Content="卸载"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </TabItem>
+            </TabControl>
+        </Grid>
+    </Border>
+</Window>

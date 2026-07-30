@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-validation:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: NovaDesktop.Electron/package-lock.json
+
+      - name: Run AgentOS smoke tests
+        run: dotnet run --project NovaDesktop.SmokeTests/NovaDesktop.SmokeTests.csproj
+
+      - name: Install Electron dependencies
+        working-directory: NovaDesktop.Electron
+        run: npm ci
+
+      - name: Build Electron shell and bridge
+        working-directory: NovaDesktop.Electron
+        run: npm run build
+
+      - name: Verify Electron bridge
+        working-directory: NovaDesktop.Electron
+        run: npm run smoke:bridge

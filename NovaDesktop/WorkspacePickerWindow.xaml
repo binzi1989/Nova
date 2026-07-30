@@ -1,0 +1,185 @@
+<Window x:Class="NovaDesktop.WorkspacePickerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="选择任务根目录"
+        Width="760"
+        Height="560"
+        MinWidth="680"
+        MinHeight="500"
+        WindowStartupLocation="CenterOwner"
+        Background="#090C12"
+        Foreground="#E8EDF7"
+        FontFamily="Segoe UI Variable Text, Segoe UI">
+    <Window.Resources>
+        <SolidColorBrush x:Key="Muted" Color="#7E899D"/>
+        <Style TargetType="Button">
+            <Setter Property="Foreground" Value="#DCE5F4"/>
+            <Setter Property="Background" Value="#151B27"/>
+            <Setter Property="BorderBrush" Value="#2B3549"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="BorderBrush" Value="#75F0FF"/>
+                                <Setter TargetName="Surface" Property="Background" Value="#192534"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Surface" Property="Opacity" Value=".42"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <TextBlock FontSize="10" FontWeight="SemiBold" Foreground="#75F0FF" Text="WORKSPACE ROUTER"/>
+            <TextBlock Margin="0,8,0,0" FontSize="24" FontWeight="SemiBold" Text="选择任务根目录"/>
+            <TextBlock Margin="0,6,0,0" Foreground="{StaticResource Muted}"
+                       Text="NOVA 会识别 Git 根目录与工程清单，避免把子目录误当成完整工作区。"/>
+        </StackPanel>
+
+        <Border Grid.Row="1" Margin="0,20,0,16" Padding="14"
+                Background="#10151F" BorderBrush="#263044" BorderThickness="1" CornerRadius="12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock x:Name="SelectedNameText" FontSize="14" FontWeight="SemiBold" Text="正在分析…"/>
+                    <TextBlock x:Name="SelectedPathText" Margin="0,5,0,0" Foreground="#8A96AA"
+                               TextTrimming="CharacterEllipsis"/>
+                    <TextBlock x:Name="SelectedProfileText" Margin="0,8,0,0" FontSize="10"
+                               Foreground="#6BE5A9" TextWrapping="Wrap"/>
+                </StackPanel>
+                <Button Grid.Column="1" Margin="16,0,0,0" VerticalAlignment="Center"
+                        Click="Browse_Click" Content="浏览目录"/>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="16"/>
+                <ColumnDefinition Width="240"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Padding="12" Background="#0D1119" BorderBrush="#20283A" BorderThickness="1" CornerRadius="12">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Margin="4,2,0,10" FontSize="11" FontWeight="SemiBold" Text="最近工作区"/>
+                    <ListBox x:Name="RecentList"
+                             Grid.Row="1"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             SelectionChanged="RecentList_SelectionChanged"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                <Setter Property="Padding" Value="0"/>
+                                <Setter Property="Margin" Value="0,0,0,8"/>
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="BorderThickness" Value="0"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border x:Name="ItemSurface" Padding="12" Background="#111722"
+                                                    BorderBrush="#222C3D" BorderThickness="1" CornerRadius="9">
+                                                <ContentPresenter/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="ItemSurface" Property="BorderBrush" Value="#42516D"/>
+                                                </Trigger>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="ItemSurface" Property="Background" Value="#172536"/>
+                                                    <Setter TargetName="ItemSurface" Property="BorderBrush" Value="#75F0FF"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel>
+                                    <TextBlock FontSize="11.5" FontWeight="SemiBold" Text="{Binding Name}"/>
+                                    <TextBlock Margin="0,4,0,0" FontSize="9.5" Foreground="#78849A"
+                                               Text="{Binding Root}" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Margin="0,5,0,0" FontSize="9" Foreground="#6BE5A9"
+                                               Text="{Binding KindLabel}"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+
+            <Border Grid.Column="2" Padding="16" Background="#10151F"
+                    BorderBrush="#263044" BorderThickness="1" CornerRadius="12">
+                <StackPanel>
+                    <TextBlock FontSize="11" FontWeight="SemiBold" Text="根目录策略"/>
+                    <CheckBox x:Name="ResolveRootCheck"
+                              Margin="0,15,0,0"
+                              IsChecked="True"
+                              Foreground="#CFD7E6"
+                              Checked="ResolveRootCheck_Changed"
+                              Unchecked="ResolveRootCheck_Changed"
+                              Content="自动定位 Git / 工程根目录"/>
+                    <TextBlock Margin="0,9,0,0" FontSize="9.5" LineHeight="15"
+                               Foreground="{StaticResource Muted}" TextWrapping="Wrap"
+                               Text="选择源码子目录时向上寻找最近的 Git 根或工程清单。关闭后严格使用所选目录。"/>
+                    <Border Margin="0,18,0,0" Padding="12" Background="#121B20"
+                            BorderBrush="#28463F" BorderThickness="1" CornerRadius="9">
+                        <StackPanel>
+                            <TextBlock FontSize="9" FontWeight="SemiBold" Foreground="#6BE5A9" Text="SMART BUILD"/>
+                            <TextBlock x:Name="BuildHintText" Margin="0,7,0,0" FontSize="9.5"
+                                       LineHeight="15" Foreground="#9CB0A9" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <Grid Grid.Row="3" Margin="0,18,0,0">
+            <TextBlock x:Name="StatusText" VerticalAlignment="Center" FontSize="9.5" Foreground="#78849A"/>
+            <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                <Button Margin="0,0,8,0" Click="Cancel_Click" Content="取消"/>
+                <Button x:Name="UseWorkspaceButton"
+                        Background="#75F0FF"
+                        BorderBrush="#75F0FF"
+                        Foreground="#071014"
+                        FontWeight="SemiBold"
+                        Click="UseWorkspace_Click"
+                        Content="使用此工作区"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

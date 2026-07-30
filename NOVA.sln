@@ -1,0 +1,63 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nova.AgentOS", "Nova.AgentOS\Nova.AgentOS.csproj", "{B65AC533-CFF6-41C6-A392-1B7A9DEEA67B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nova.Core", "Nova.Core\Nova.Core.csproj", "{410DDEE4-8A88-4B73-A2D1-78C13D71A80D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NovaDesktop", "NovaDesktop\NovaDesktop.csproj", "{55825CA0-9947-4E68-8112-6A6E03C717DE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nova.AgentOS.Bridge", "Nova.AgentOS.Bridge\Nova.AgentOS.Bridge.csproj", "{88DA0AF8-5583-47ED-B340-51DF53DC36CE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NovaDesktop.Mac", "NovaDesktop.Mac\NovaDesktop.Mac.csproj", "{4B989A57-BA07-451E-8032-24961E9B07A2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NovaDesktop.SmokeTests", "NovaDesktop.SmokeTests\NovaDesktop.SmokeTests.csproj", "{B6FBFF12-7E80-4CA9-AC0B-C43E6969391C}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{4A66C3EB-155C-4386-9BF5-E4EAAE610C96}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NovaMacPackager", "tools\NovaMacPackager\NovaMacPackager.csproj", "{87564DE0-E7CF-4DD8-A7B4-45588746B28F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{B65AC533-CFF6-41C6-A392-1B7A9DEEA67B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B65AC533-CFF6-41C6-A392-1B7A9DEEA67B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B65AC533-CFF6-41C6-A392-1B7A9DEEA67B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B65AC533-CFF6-41C6-A392-1B7A9DEEA67B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{410DDEE4-8A88-4B73-A2D1-78C13D71A80D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{410DDEE4-8A88-4B73-A2D1-78C13D71A80D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{410DDEE4-8A88-4B73-A2D1-78C13D71A80D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{410DDEE4-8A88-4B73-A2D1-78C13D71A80D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{55825CA0-9947-4E68-8112-6A6E03C717DE}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{55825CA0-9947-4E68-8112-6A6E03C717DE}.Debug|Any CPU.Build.0 = Debug|x64
+		{55825CA0-9947-4E68-8112-6A6E03C717DE}.Release|Any CPU.ActiveCfg = Release|x64
+		{55825CA0-9947-4E68-8112-6A6E03C717DE}.Release|Any CPU.Build.0 = Release|x64
+		{88DA0AF8-5583-47ED-B340-51DF53DC36CE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{88DA0AF8-5583-47ED-B340-51DF53DC36CE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{88DA0AF8-5583-47ED-B340-51DF53DC36CE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{88DA0AF8-5583-47ED-B340-51DF53DC36CE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4B989A57-BA07-451E-8032-24961E9B07A2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4B989A57-BA07-451E-8032-24961E9B07A2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4B989A57-BA07-451E-8032-24961E9B07A2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4B989A57-BA07-451E-8032-24961E9B07A2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B6FBFF12-7E80-4CA9-AC0B-C43E6969391C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B6FBFF12-7E80-4CA9-AC0B-C43E6969391C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B6FBFF12-7E80-4CA9-AC0B-C43E6969391C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B6FBFF12-7E80-4CA9-AC0B-C43E6969391C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{87564DE0-E7CF-4DD8-A7B4-45588746B28F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{87564DE0-E7CF-4DD8-A7B4-45588746B28F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{87564DE0-E7CF-4DD8-A7B4-45588746B28F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{87564DE0-E7CF-4DD8-A7B4-45588746B28F}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{87564DE0-E7CF-4DD8-A7B4-45588746B28F} = {4A66C3EB-155C-4386-9BF5-E4EAAE610C96}
+	EndGlobalSection
+EndGlobal

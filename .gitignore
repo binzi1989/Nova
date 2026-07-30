@@ -1,0 +1,78 @@
+# NOVA repository policy:
+# commit source, configuration examples and documentation;
+# publish binaries through GitHub Releases.
+
+# .NET
+**/bin/
+**/obj/
+**/TestResults/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.nupkg
+*.snupkg
+
+# Node / Electron
+**/node_modules/
+**/.vite/
+NovaDesktop.Electron/dist/
+NovaDesktop.Electron/dist-*/
+NovaDesktop.Electron/dist-electron*/
+NovaDesktop.Electron/resources/bridge/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Generated releases and QA workspaces
+/dist/
+/artifacts/
+/.mac-release/
+/.qa-build/
+/.release-bin/
+/.tmp-*/
+/packaging/output/
+
+# Local SDKs, caches and agent metadata
+/.dotnet-home/
+/.dotnet-local/
+/.dotnet-cli/
+/.tools/
+/.agents/
+/.codex/
+/.nova/
+**/.cache/
+**/.pytest_cache/
+
+# IDE / OS
+/.vs/
+/.vscode/
+/.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Runtime data, logs and crash reports
+*.log
+*.dmp
+*.tmp
+*.bak
+crashes/
+outputs/
+execution-events.jsonl
+
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.pem
+*.key
+*.snk
+secrets.json
+appsettings.Local.json
+mcp-servers.json
+schedules.json

@@ -1,0 +1,390 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="using:NovaDesktop.Mac"
+        xmlns:models="using:NovaDesktop.Models"
+        x:Class="NovaDesktop.Mac.MainWindow"
+        x:DataType="local:MainWindow"
+        Title="NOVA for Mac"
+        Width="1380"
+        Height="880"
+        MinWidth="1100"
+        MinHeight="700"
+        Background="#080B11"
+        Foreground="#E8EDF6"
+        WindowStartupLocation="CenterScreen">
+    <Window.Styles>
+        <Style Selector="Border.card">
+            <Setter Property="Background" Value="#101722"/>
+            <Setter Property="BorderBrush" Value="#27344A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="Padding" Value="14"/>
+        </Style>
+        <Style Selector="TextBlock.muted">
+            <Setter Property="Foreground" Value="#7C899F"/>
+            <Setter Property="FontSize" Value="11"/>
+        </Style>
+        <Style Selector="Button.primary">
+            <Setter Property="Background" Value="#71EAF8"/>
+            <Setter Property="Foreground" Value="#061014"/>
+        </Style>
+        <Style Selector="Button.ghost">
+            <Setter Property="Background" Value="#151F2E"/>
+            <Setter Property="BorderBrush" Value="#30405A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        <Style Selector="ListBoxItem">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        </Style>
+    </Window.Styles>
+
+    <Grid RowDefinitions="54,*">
+        <Border Grid.Row="0"
+                Background="#0C111A"
+                BorderBrush="#202A3A"
+                BorderThickness="0,0,0,1">
+            <Grid Margin="18,0" ColumnDefinitions="Auto,*,Auto">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Spacing="10">
+                    <Grid Width="25" Height="25">
+                        <Ellipse Fill="#253B52"/>
+                        <Ellipse Width="14" Height="14" Fill="#71EAF8"/>
+                        <Ellipse Width="5" Height="5" Fill="White"/>
+                    </Grid>
+                    <TextBlock VerticalAlignment="Center"
+                               FontSize="14"
+                               FontWeight="SemiBold"
+                               Text="NOVA"/>
+                    <Border Padding="7,3" Background="#172537" CornerRadius="5">
+                        <TextBlock FontSize="9"
+                                   FontWeight="SemiBold"
+                                   Foreground="#71EAF8"
+                                   Text="MAC · SHARED CORE"/>
+                    </Border>
+                </StackPanel>
+                <StackPanel Grid.Column="1"
+                            HorizontalAlignment="Center"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center"
+                            Spacing="9">
+                    <Ellipse Width="6" Height="6" Fill="{Binding RuntimeDot}"/>
+                    <TextBlock Classes="muted" Text="{Binding RuntimeStatus}"/>
+                    <TextBlock Classes="muted" Foreground="#4D5A70" Text="·"/>
+                    <TextBlock Classes="muted" Text="{Binding WorkspaceStatus}"/>
+                </StackPanel>
+                <TextBlock Grid.Column="2"
+                           VerticalAlignment="Center"
+                           Classes="muted"
+                           Foreground="#6BE5A9"
+                           Text="{Binding AgentOsStatus}"/>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" ColumnDefinitions="270,*,286">
+            <Border Background="#0B1018"
+                    BorderBrush="#202A3A"
+                    BorderThickness="0,0,1,0">
+                <Grid Margin="16" RowDefinitions="Auto,Auto,Auto,*,Auto">
+                    <StackPanel>
+                        <TextBlock FontSize="10"
+                                   FontWeight="SemiBold"
+                                   Foreground="#71EAF8"
+                                   Text="QUICK START"/>
+                        <TextBlock Margin="0,6,0,0"
+                                   Classes="muted"
+                                   TextWrapping="Wrap"
+                                   Text="选择工作区和模型，然后直接描述你想得到的结果。"/>
+                    </StackPanel>
+
+                    <Border Grid.Row="1" Margin="0,14,0,0" Classes="card">
+                        <StackPanel Spacing="9">
+                            <TextBlock FontSize="12" FontWeight="SemiBold" Text="1 · 工作区"/>
+                            <TextBlock Classes="muted"
+                                       MaxLines="2"
+                                       TextTrimming="CharacterEllipsis"
+                                       Text="{Binding WorkspaceRoot}"/>
+                            <Button Classes="ghost"
+                                    HorizontalAlignment="Stretch"
+                                    Click="ChooseWorkspace_Click"
+                                    Content="选择任务根目录"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="2" Margin="0,10,0,0" Classes="card">
+                        <StackPanel Spacing="9">
+                            <TextBlock FontSize="12" FontWeight="SemiBold" Text="2 · 执行模式与模型"/>
+                            <ComboBox x:Name="ModeBox"
+                                      SelectedIndex="0"
+                                      SelectionChanged="Mode_SelectionChanged">
+                                <ComboBoxItem Content="Ask · 单模型"/>
+                                <ComboBoxItem Content="Autopilot · 3 子 Agent"/>
+                            </ComboBox>
+                            <ComboBox x:Name="ProviderBox"
+                                      SelectedIndex="0"
+                                      SelectionChanged="Provider_SelectionChanged">
+                                <ComboBoxItem Content="OpenAI"/>
+                                <ComboBoxItem Content="DeepSeek"/>
+                                <ComboBoxItem Content="Kimi · Moonshot AI"/>
+                            </ComboBox>
+                            <TextBox x:Name="ModelBox" Text="gpt-5.6"/>
+                            <TextBox x:Name="ApiKeyBox"
+                                     PasswordChar="●"
+                                     PlaceholderText="API Key · 仅保存在内存"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="3" Margin="0,10,0,10" Classes="card" Padding="10">
+                        <Grid RowDefinitions="Auto,*">
+                            <Grid Margin="4,2,4,9" ColumnDefinitions="*,Auto">
+                                <TextBlock FontSize="11.5"
+                                           FontWeight="SemiBold"
+                                           Text="任务空间"/>
+                                <TextBlock Grid.Column="1"
+                                           Classes="muted"
+                                           Text="{Binding TaskCountLabel}"/>
+                            </Grid>
+                            <ListBox Grid.Row="1"
+                                     ItemsSource="{Binding Tasks}"
+                                     Background="Transparent"
+                                     BorderThickness="0">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate x:DataType="models:TaskItem">
+                                        <Border Margin="0,0,0,8"
+                                                Padding="10"
+                                                Background="#0C131E"
+                                                BorderBrush="#25344A"
+                                                BorderThickness="1"
+                                                CornerRadius="9">
+                                            <StackPanel Spacing="6">
+                                                <TextBlock FontSize="11"
+                                                           FontWeight="SemiBold"
+                                                           Text="{Binding Title}"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                                <Grid ColumnDefinitions="*,Auto">
+                                                    <TextBlock Classes="muted"
+                                                               Text="{Binding Stage}"
+                                                               TextTrimming="CharacterEllipsis"/>
+                                                    <TextBlock Grid.Column="1"
+                                                               FontSize="9"
+                                                               Foreground="#71EAF8"
+                                                               Text="{Binding State}"/>
+                                                </Grid>
+                                                <ProgressBar Height="3"
+                                                             Minimum="0"
+                                                             Maximum="100"
+                                                             Value="{Binding Progress}"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="4" Classes="card">
+                        <StackPanel Spacing="8">
+                            <TextBlock FontSize="11.5" FontWeight="SemiBold" Text="权限边界"/>
+                            <TextBlock Classes="muted"
+                                       LineHeight="17"
+                                       TextWrapping="Wrap"
+                                       Text="Ask 使用一次模型请求；Autopilot 创建 3 个只读子 Agent 并行分析。写文件、命令与系统控制尚未迁移，不会伪装成交付。"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <Grid Grid.Column="1" Margin="18,16" RowDefinitions="Auto,*,Auto">
+                <Border Classes="card" Padding="15,11">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel>
+                            <TextBlock FontSize="10"
+                                       FontWeight="SemiBold"
+                                       Foreground="#71EAF8"
+                                       Text="NOVA THREADSPACE"/>
+                            <TextBlock Margin="0,4,0,0"
+                                       Classes="muted"
+                                       Text="{Binding WorkspaceDetail}"/>
+                        </StackPanel>
+                        <Border Grid.Column="1"
+                                Padding="9,5"
+                                Background="#142434"
+                                CornerRadius="7">
+                            <TextBlock FontSize="9"
+                                       Foreground="#71EAF8"
+                                       Text="PERSISTED · SUPERVISED · RECOVERABLE"/>
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <Grid Grid.Row="1" Margin="0,12">
+                    <StackPanel HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                IsVisible="{Binding IsConversationEmpty}"
+                                MaxWidth="540">
+                        <Grid Width="66" Height="66">
+                            <Ellipse Stroke="#394B67" StrokeThickness="1"/>
+                            <Ellipse Width="32" Height="32" Fill="#6C7EF5"/>
+                            <Ellipse Width="16" Height="16" Fill="#71EAF8"/>
+                            <Ellipse Width="5" Height="5" Fill="White"/>
+                        </Grid>
+                        <TextBlock Margin="0,17,0,0"
+                                   HorizontalAlignment="Center"
+                                   FontSize="21"
+                                   FontWeight="SemiBold"
+                                   Text="从一个真实目标开始"/>
+                        <TextBlock Margin="0,8,0,0"
+                                   TextAlignment="Center"
+                                   Classes="muted"
+                                   LineHeight="18"
+                                   TextWrapping="Wrap"
+                                   Text="每次请求都会进入共享 AgentOS，留下任务图、进度、监督租约与恢复快照。&#x0a;API Key 只停留在当前进程内存。"/>
+                        <Button Margin="0,15,0,0"
+                                Classes="ghost"
+                                Click="UseStarterGoal_Click"
+                                Content="填入工程审查目标"/>
+                    </StackPanel>
+
+                    <ListBox ItemsSource="{Binding Turns}"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             IsVisible="{Binding !IsConversationEmpty}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="local:MacChatTurn">
+                                <Border Margin="0,0,0,12"
+                                        Padding="14,12"
+                                        Background="#101722"
+                                        BorderBrush="{Binding Border}"
+                                        BorderThickness="1"
+                                        CornerRadius="5,13,13,13"
+                                        HorizontalAlignment="Stretch">
+                                    <StackPanel>
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock FontSize="9.5"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="{Binding Accent}"
+                                                       Text="{Binding Speaker}"/>
+                                            <TextBlock Grid.Column="1"
+                                                       FontSize="8.5"
+                                                       Foreground="#526078"
+                                                       Text="{Binding Time}"/>
+                                        </Grid>
+                                        <TextBlock Margin="0,9,0,0"
+                                                   FontSize="12"
+                                                   LineHeight="19"
+                                                   TextWrapping="Wrap"
+                                                   Text="{Binding Content}"/>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+
+                <Border Grid.Row="2"
+                        Background="#101722"
+                        BorderBrush="#2A3950"
+                        BorderThickness="1"
+                        CornerRadius="13"
+                        Padding="12">
+                    <Grid RowDefinitions="*,Auto">
+                        <TextBox x:Name="PromptBox"
+                                 MinHeight="72"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 PlaceholderText="描述你希望完成或理解的真实目标…"/>
+                        <Grid Grid.Row="1" Margin="0,10,0,0" ColumnDefinitions="*,Auto">
+                            <TextBlock VerticalAlignment="Center"
+                                       Classes="muted"
+                                       Text="{Binding ComposerHint}"/>
+                            <Button x:Name="SendButton"
+                                    Grid.Column="1"
+                                    Classes="primary"
+                                    Click="Send_Click"
+                                    Content="发送到模型  →"/>
+                        </Grid>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <Border Grid.Column="2"
+                    Background="#0B1018"
+                    BorderBrush="#202A3A"
+                    BorderThickness="1,0,0,0">
+                <Grid Margin="16" RowDefinitions="Auto,Auto,Auto,*">
+                    <StackPanel>
+                        <TextBlock FontSize="13" FontWeight="SemiBold" Text="本机能力"/>
+                        <TextBlock Margin="0,4,0,0"
+                                   Classes="muted"
+                                   Text="只展示真实可用状态"/>
+                    </StackPanel>
+
+                    <Border Grid.Row="1" Margin="0,14,0,0" Classes="card">
+                        <StackPanel Spacing="9">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock FontSize="11.5" FontWeight="SemiBold" Text="工作区上下文"/>
+                                <TextBlock Grid.Column="1"
+                                           FontSize="9"
+                                           Foreground="#6BE5A9"
+                                           Text="READ ONLY"/>
+                            </Grid>
+                            <TextBlock Classes="muted" Text="{Binding WorkspaceTechnology}"/>
+                            <TextBlock Classes="muted" Text="{Binding WorkspaceFileCount}"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="2" Margin="0,10,0,0" Classes="card">
+                        <StackPanel Spacing="9">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock FontSize="11.5" FontWeight="SemiBold" Text="MCP 发现"/>
+                                <TextBlock Grid.Column="1"
+                                           FontSize="9"
+                                           Foreground="#FFC470"
+                                           Text="授权触发"/>
+                            </Grid>
+                            <TextBlock Classes="muted"
+                                       TextWrapping="Wrap"
+                                       Text="点击后仅检查常见配置文件是否存在，不读取内容、不启动 Server。"/>
+                            <Button Classes="ghost"
+                                    Click="ProbeMcp_Click"
+                                    Content="检查配置位置"/>
+                            <ItemsControl ItemsSource="{Binding McpLocations}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="0,3,0,0"
+                                                Padding="8,6"
+                                                Background="#0C121B"
+                                                CornerRadius="6">
+                                            <TextBlock FontSize="9"
+                                                       Foreground="#8290A8"
+                                                       Text="{Binding}"/>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="3" Margin="0,10,0,0" Classes="card">
+                        <StackPanel Spacing="9">
+                            <TextBlock FontSize="11.5" FontWeight="SemiBold" Text="同步状态"/>
+                            <TextBlock Classes="muted"
+                                       LineHeight="18"
+                                       TextWrapping="Wrap"
+                                       Text="✓ 共享 AgentOS Kernel&#x0a;✓ 任务快照与恢复&#x0a;✓ 单调执行事件账本&#x0a;✓ Task Graph / Supervisor&#x0a;✓ 弹性预算与并行上限&#x0a;✓ OpenAI / DeepSeek / Kimi&#x0a;✓ 三子 Agent 并行汇总&#x0a;○ 写文件、终端与真实交付&#x0a;○ Keychain 与能力市场"/>
+                            <Border Padding="9"
+                                    Background="#14202F"
+                                    CornerRadius="7">
+                                <TextBlock FontSize="9"
+                                           Foreground="#71809A"
+                                           TextWrapping="Wrap"
+                                           Text="Mac 与 Windows 共用任务真相层；平台尚未迁移的执行能力会明确保持不可用。"/>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

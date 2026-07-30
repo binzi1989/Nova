@@ -1,0 +1,406 @@
+<Window x:Class="NovaDesktop.ScheduleWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NOVA 计划中心"
+        Width="980"
+        Height="640"
+        MinWidth="860"
+        MinHeight="560"
+        WindowStartupLocation="CenterOwner"
+        WindowStyle="None"
+        ResizeMode="CanResizeWithGrip"
+        Background="#070A12"
+        Foreground="#F4F7FF">
+    <Window.Resources>
+        <SolidColorBrush x:Key="Muted" Color="#8998B0"/>
+        <SolidColorBrush x:Key="Signal" Color="#62E6FF"/>
+        <Style TargetType="TextBox">
+            <Setter Property="Foreground" Value="#EDF3FF"/>
+            <Setter Property="Background" Value="#0B1321"/>
+            <Setter Property="BorderBrush" Value="#2A3B5A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="CaretBrush" Value="#62E6FF"/>
+            <Setter Property="SelectionBrush" Value="#66748BFF"/>
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="Foreground" Value="#EDF3FF"/>
+            <Setter Property="Background" Value="#0B1321"/>
+            <Setter Property="BorderBrush" Value="#2A3B5A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8,6"/>
+        </Style>
+        <Style TargetType="DatePicker">
+            <Setter Property="Foreground" Value="#EDF3FF"/>
+            <Setter Property="Background" Value="#0B1321"/>
+            <Setter Property="BorderBrush" Value="#2A3B5A"/>
+        </Style>
+        <Style TargetType="Button">
+            <Setter Property="Foreground" Value="#DDE7F8"/>
+            <Setter Property="Background" Value="#121C2D"/>
+            <Setter Property="BorderBrush" Value="#2B4164"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="13,8"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="#182842"/>
+                                <Setter TargetName="Root" Property="BorderBrush" Value="#5476A8"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Root" Property="Opacity" Value=".38"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="PrimaryAction" TargetType="Button">
+            <Setter Property="Foreground" Value="#06101B"/>
+            <Setter Property="Background" Value="#6BE5FF"/>
+            <Setter Property="BorderBrush" Value="#8AF0FF"/>
+            <Setter Property="Padding" Value="16,10"/>
+        </Style>
+        <Style x:Key="ScheduleItemStyle" TargetType="ListBoxItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Card"
+                                Background="#0D1523"
+                                BorderBrush="#233451"
+                                BorderThickness="1"
+                                CornerRadius="10"
+                                Padding="13">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Card" Property="BorderBrush" Value="#62E6FF"/>
+                                <Setter TargetName="Card" Property="Background" Value="#13223A"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Card" Property="BorderBrush" Value="#405C87"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border BorderBrush="#263653" BorderThickness="1" CornerRadius="14" Background="#070A12">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="58"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="58"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Background="#0B101B" MouseLeftButtonDown="Header_MouseLeftButtonDown">
+                <StackPanel Orientation="Horizontal" Margin="18,0" VerticalAlignment="Center">
+                    <Border Width="32"
+                            Height="32"
+                            Background="#16243B"
+                            BorderBrush="#36547E"
+                            BorderThickness="1"
+                            CornerRadius="9">
+                        <TextBlock FontFamily="Segoe Fluent Icons"
+                                   Text="&#xE823;"
+                                   Foreground="#9A86FF"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Border>
+                    <StackPanel Margin="11,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="计划任务中心" FontSize="14" FontWeight="SemiBold"/>
+                        <TextBlock Text="在明确的时间，让 NOVA 继续处理真实工作区"
+                                   FontSize="9.5"
+                                   Foreground="{StaticResource Muted}"/>
+                    </StackPanel>
+                </StackPanel>
+                <Button Width="42"
+                        Height="34"
+                        Padding="0"
+                        HorizontalAlignment="Right"
+                        Margin="0,0,11,0"
+                        Click="Close_Click"
+                        ToolTip="关闭"
+                        Content="✕"/>
+            </Grid>
+
+            <Grid Grid.Row="1" Margin="18">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.15*"/>
+                    <ColumnDefinition Width="14"/>
+                    <ColumnDefinition Width=".85*"/>
+                </Grid.ColumnDefinitions>
+
+                <Grid Grid.Column="0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid Margin="2,0,2,11">
+                        <StackPanel>
+                            <TextBlock Text="计划库" FontSize="12" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="CountText"
+                                       Margin="0,4,0,0"
+                                       Foreground="{StaticResource Muted}"
+                                       FontSize="9.5"/>
+                        </StackPanel>
+                        <Button HorizontalAlignment="Right"
+                                VerticalAlignment="Center"
+                                Padding="10,6"
+                                Click="FocusCreate_Click"
+                                Content="+ 新建计划"/>
+                    </Grid>
+
+                    <Grid Grid.Row="1">
+                        <ListBox x:Name="ScheduleList"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 ItemContainerStyle="{StaticResource ScheduleItemStyle}"
+                                 SelectionChanged="ScheduleList_SelectionChanged"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="122"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <StackPanel Orientation="Horizontal">
+                                                <Ellipse Width="6"
+                                                         Height="6"
+                                                         Margin="0,0,7,0"
+                                                         VerticalAlignment="Center"
+                                                         Fill="{Binding StateBrush}"/>
+                                                <TextBlock Text="{Binding Name}"
+                                                           FontSize="11.5"
+                                                           FontWeight="SemiBold"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                            </StackPanel>
+                                            <TextBlock Margin="13,6,0,0"
+                                                       Text="{Binding Prompt}"
+                                                       Foreground="#8291A9"
+                                                       FontSize="9.5"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Margin="13,8,0,0"
+                                                       Foreground="#5E708C"
+                                                       FontSize="8.8"
+                                                       Text="{Binding RuntimeLabel}"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1"
+                                                    VerticalAlignment="Center"
+                                                    HorizontalAlignment="Right">
+                                            <TextBlock Text="{Binding ModeLabel}"
+                                                       Foreground="#AF9EFF"
+                                                       FontSize="9"
+                                                       HorizontalAlignment="Right"/>
+                                            <TextBlock Margin="0,5,0,0"
+                                                       Text="{Binding NextRunLabel}"
+                                                       Foreground="#B9C5D8"
+                                                       FontSize="9.5"
+                                                       HorizontalAlignment="Right"/>
+                                            <TextBlock Margin="0,4,0,0"
+                                                       Text="{Binding StateLabel}"
+                                                       Foreground="{Binding StateBrush}"
+                                                       FontSize="8.8"
+                                                       HorizontalAlignment="Right"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <Border x:Name="EmptyState"
+                                Padding="28"
+                                Background="#0B111D"
+                                BorderBrush="#243754"
+                                BorderThickness="1"
+                                CornerRadius="12">
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <Border Width="48"
+                                        Height="48"
+                                        Background="#152641"
+                                        BorderBrush="#385B89"
+                                        BorderThickness="1"
+                                        CornerRadius="14">
+                                    <TextBlock FontFamily="Segoe Fluent Icons"
+                                               FontSize="19"
+                                               Foreground="{StaticResource Signal}"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               Text="&#xE823;"/>
+                                </Border>
+                                <TextBlock Margin="0,16,0,0"
+                                           FontSize="15"
+                                           FontWeight="SemiBold"
+                                           Text="还没有计划任务"/>
+                                <TextBlock Margin="0,8,0,0"
+                                           MaxWidth="310"
+                                           FontSize="10"
+                                           LineHeight="16"
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap"
+                                           Foreground="#8C9BB2"
+                                           Text="让 NOVA 在指定时间继续处理当前工作区。创建动作就是你的明确授权，不会再叠加第二层确认。"/>
+                                <Button Margin="0,18,0,0"
+                                        Style="{StaticResource PrimaryAction}"
+                                        Click="FocusCreate_Click"
+                                        Content="创建第一个计划"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </Grid>
+
+                <Border Grid.Column="2"
+                        Background="#0D1422"
+                        BorderBrush="#283B5B"
+                        BorderThickness="1"
+                        CornerRadius="12"
+                        Padding="17">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel>
+                            <TextBlock Text="创建计划" FontSize="13" FontWeight="SemiBold"/>
+                            <TextBlock Margin="0,5,0,0"
+                                       FontSize="9.5"
+                                       Foreground="{StaticResource Muted}"
+                                       Text="直接创建，不消耗一次模型推理。"/>
+
+                            <TextBlock Margin="0,17,0,6" FontSize="9.5" Foreground="#AAB7CB" Text="计划名称（可选）"/>
+                            <TextBox x:Name="NameBox"
+                                     MaxLength="80"
+                                     ToolTip="留空时会从任务目标自动生成"/>
+
+                            <TextBlock Margin="0,13,0,6" FontSize="9.5" Foreground="#AAB7CB" Text="要完成的目标"/>
+                            <TextBox x:Name="PromptBox"
+                                     MinHeight="92"
+                                     MaxLength="12000"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     VerticalScrollBarVisibility="Auto"/>
+
+                            <TextBlock Margin="0,13,0,7" FontSize="9.5" Foreground="#AAB7CB" Text="运行方式"/>
+                            <StackPanel Orientation="Horizontal">
+                                <RadioButton x:Name="OnceRadio"
+                                             IsChecked="True"
+                                             Checked="Mode_Checked"
+                                             Foreground="#E6ECF7"
+                                             Content="执行一次"/>
+                                <RadioButton x:Name="IntervalRadio"
+                                             Margin="18,0,0,0"
+                                             Checked="Mode_Checked"
+                                             Foreground="#E6ECF7"
+                                             Content="重复执行"/>
+                            </StackPanel>
+
+                            <Grid x:Name="OncePanel" Margin="0,10,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="9"/>
+                                    <ColumnDefinition Width="88"/>
+                                </Grid.ColumnDefinitions>
+                                <DatePicker x:Name="RunDatePicker"/>
+                                <TextBox x:Name="RunTimeBox"
+                                         Grid.Column="2"
+                                         Text="09:00"
+                                         ToolTip="本地时间，例如 09:30"/>
+                            </Grid>
+
+                            <ComboBox x:Name="IntervalBox"
+                                      Margin="0,10,0,0"
+                                      SelectedIndex="2"
+                                      Visibility="Collapsed">
+                                <ComboBoxItem Tag="15" Content="每 15 分钟"/>
+                                <ComboBoxItem Tag="30" Content="每 30 分钟"/>
+                                <ComboBoxItem Tag="60" Content="每 1 小时"/>
+                                <ComboBoxItem Tag="240" Content="每 4 小时"/>
+                                <ComboBoxItem Tag="1440" Content="每天"/>
+                                <ComboBoxItem Tag="10080" Content="每 7 天"/>
+                            </ComboBox>
+
+                            <Border Margin="0,15,0,0"
+                                    Padding="11"
+                                    Background="#0A111E"
+                                    BorderBrush="#233653"
+                                    BorderThickness="1"
+                                    CornerRadius="9">
+                                <StackPanel>
+                                    <TextBlock FontSize="8.5" Foreground="#667A99" Text="运行上下文"/>
+                                    <TextBlock x:Name="WorkspaceText"
+                                               Margin="0,5,0,0"
+                                               FontSize="9"
+                                               Foreground="#B5C1D3"
+                                               TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock x:Name="RuntimeText"
+                                               Margin="0,4,0,0"
+                                               FontSize="9"
+                                               Foreground="#8CA0BD"/>
+                                    <TextBlock x:Name="KeyStatusText"
+                                               Margin="0,4,0,0"
+                                               FontSize="8.8"/>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock x:Name="FormErrorText"
+                                       Margin="0,11,0,0"
+                                       Foreground="#FF8296"
+                                       FontSize="9.2"
+                                       TextWrapping="Wrap"/>
+                            <Button x:Name="CreateButton"
+                                    Margin="0,13,0,0"
+                                    Style="{StaticResource PrimaryAction}"
+                                    Click="Create_Click"
+                                    Content="创建一次性计划"/>
+                            <TextBlock Margin="0,9,0,0"
+                                       FontSize="8.5"
+                                       LineHeight="13"
+                                       Foreground="#687B98"
+                                       TextWrapping="Wrap"
+                                       Text="周期计划会持续产生模型与工具成本。NOVA 需要保持运行；关闭期间错过的计划会在下次启动后处理。"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Border>
+            </Grid>
+
+            <Grid Grid.Row="2" Margin="18,8,18,12">
+                <TextBlock x:Name="StatusText"
+                           MaxWidth="610"
+                           Foreground="{StaticResource Muted}"
+                           FontSize="9.5"
+                           VerticalAlignment="Center"
+                           Text="计划执行需要 NOVA 保持运行并具备对应模型密钥。"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Margin="0,0,8,0" Click="Refresh_Click" Content="刷新"/>
+                    <Button x:Name="DisableButton"
+                            IsEnabled="False"
+                            Click="Disable_Click"
+                            Background="#211622"
+                            BorderBrush="#51314B"
+                            Foreground="#FF9CB5"
+                            Content="停用所选计划"/>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>NovaDesktop</RootNamespace>
+    <AssemblyName>Nova.AgentOS</AssemblyName>
+    <Version>0.9.0-preview.29</Version>
+    <InformationalVersion>$(Version)</InformationalVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\NovaDesktop\Models\ActivityEntry.cs" Link="Models\ActivityEntry.cs" />
+    <Compile Include="..\NovaDesktop\Models\AgentInputAttachment.cs" Link="Models\AgentInputAttachment.cs" />
+    <Compile Include="..\NovaDesktop\Models\AgentOsModels.cs" Link="Models\AgentOsModels.cs" />
+    <Compile Include="..\NovaDesktop\Models\AgentSupervisorModels.cs" Link="Models\AgentSupervisorModels.cs" />
+    <Compile Include="..\NovaDesktop\Models\TaskFailureModels.cs" Link="Models\TaskFailureModels.cs" />
+    <Compile Include="..\NovaDesktop\Models\TaskItem.cs" Link="Models\TaskItem.cs" />
+
+    <Compile Include="..\NovaDesktop\Services\AgentExecutionPolicy.cs" Link="Services\AgentExecutionPolicy.cs" />
+    <Compile Include="..\NovaDesktop\Services\AgentOsKernel.cs" Link="Services\AgentOsKernel.cs" />
+    <Compile Include="..\NovaDesktop\Services\AgentResourceGovernor.cs" Link="Services\AgentResourceGovernor.cs" />
+    <Compile Include="..\NovaDesktop\Services\AgentRuntimeContracts.cs" Link="Services\AgentRuntimeContracts.cs" />
+    <Compile Include="..\NovaDesktop\Services\AgentSupervisorService.cs" Link="Services\AgentSupervisorService.cs" />
+    <Compile Include="..\NovaDesktop\Services\AgentTaskGraphService.cs" Link="Services\AgentTaskGraphService.cs" />
+    <Compile Include="..\NovaDesktop\Services\NovaProductVersion.cs" Link="Services\NovaProductVersion.cs" />
+    <Compile Include="..\NovaDesktop\Services\SideEffectReceiptService.cs" Link="Services\SideEffectReceiptService.cs" />
+    <Compile Include="..\NovaDesktop\Services\TaskFailureService.cs" Link="Services\TaskFailureService.cs" />
+    <Compile Include="..\NovaDesktop\Services\TaskJournalService.cs" Link="Services\TaskJournalService.cs" />
+    <Compile Include="..\NovaDesktop\Services\TaskSnapshotService.cs" Link="Services\TaskSnapshotService.cs" />
+  </ItemGroup>
+</Project>

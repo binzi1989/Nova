@@ -1,0 +1,380 @@
+<Window x:Class="NovaDesktop.AgentOsCenterWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:models="clr-namespace:NovaDesktop.Models;assembly=Nova.AgentOS"
+        Title="NOVA AgentOS"
+        Width="1240"
+        Height="780"
+        MinWidth="1040"
+        MinHeight="680"
+        WindowStartupLocation="CenterOwner"
+        WindowStyle="None"
+        ResizeMode="CanResize"
+        Background="#080A0F"
+        Foreground="#F5F7FC"
+        PreviewKeyDown="Window_PreviewKeyDown">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="54"
+                            ResizeBorderThickness="7"
+                            CornerRadius="0"
+                            GlassFrameThickness="0"
+                            UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <Style x:Key="PanelCard" TargetType="Border">
+            <Setter Property="Background" Value="#C90E121B"/>
+            <Setter Property="BorderBrush" Value="#242C3D"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="14"/>
+            <Setter Property="Padding" Value="16"/>
+        </Style>
+        <Style x:Key="CompactButton" TargetType="Button">
+            <Setter Property="Foreground" Value="#AAB5CA"/>
+            <Setter Property="Background" Value="#151B27"/>
+            <Setter Property="BorderBrush" Value="#2A3448"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="13,7"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface"
+                                Padding="{TemplateBinding Padding}"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#20293A"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ServiceItem" TargetType="ListBoxItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <ContentPresenter/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="NodeSurface" TargetType="Border">
+            <Setter Property="Background" Value="#121722"/>
+            <Setter Property="BorderBrush" Value="#293349"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="11"/>
+            <Setter Property="Padding" Value="13,11"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding State}" Value="{x:Static models:AgentGraphNodeState.Running}">
+                    <Setter Property="BorderBrush" Value="#75F0FF"/>
+                    <Setter Property="Background" Value="#14212B"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding State}" Value="{x:Static models:AgentGraphNodeState.Completed}">
+                    <Setter Property="BorderBrush" Value="#315B50"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding State}" Value="{x:Static models:AgentGraphNodeState.Failed}">
+                    <Setter Property="BorderBrush" Value="#A34E5D"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Border BorderBrush="#252B39" BorderThickness="1">
+        <Grid>
+            <Grid.Background>
+                <RadialGradientBrush Center=".55,.26" GradientOrigin=".55,.26" RadiusX=".72" RadiusY=".95">
+                    <GradientStop Color="#121C30" Offset="0"/>
+                    <GradientStop Color="#090C13" Offset=".56"/>
+                    <GradientStop Color="#07090D" Offset="1"/>
+                </RadialGradientBrush>
+            </Grid.Background>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="54"/>
+                <RowDefinition Height="96"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Background="#D9080B11" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" Margin="20,0" VerticalAlignment="Center">
+                    <Grid Width="25" Height="25">
+                        <Ellipse Fill="#2475F0FF"/>
+                        <Ellipse Width="13" Height="13" Fill="#75F0FF"/>
+                        <Ellipse Width="5" Height="5" Fill="#F7FFFF"/>
+                    </Grid>
+                    <TextBlock Margin="10,0,0,0" VerticalAlignment="Center"
+                               FontSize="14" FontWeight="SemiBold" Text="NOVA AgentOS"/>
+                    <Border Margin="10,0,0,0" Padding="7,3" Background="#1A2333" CornerRadius="5">
+                        <TextBlock Foreground="#75F0FF" FontSize="9" FontWeight="SemiBold" Text="AGENTOS · 0.9 PREVIEW"/>
+                    </Border>
+                </StackPanel>
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            Margin="0,0,8,0"
+                            VerticalAlignment="Center"
+                            Panel.ZIndex="10"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Button MinWidth="92"
+                            Height="38"
+                            Style="{StaticResource CompactButton}"
+                            Click="Refresh_Click"
+                            ToolTip="立即刷新 AgentOS 状态"
+                            Content="刷新状态"/>
+                    <Button Width="46"
+                            Height="38"
+                            Margin="8,0,0,0"
+                            Padding="0"
+                            Style="{StaticResource CompactButton}"
+                            Click="Close_Click"
+                            ToolTip="关闭（Esc）">
+                        <Path Width="13"
+                              Height="13"
+                              Data="M1.5,1.5 L11.5,11.5 M11.5,1.5 L1.5,11.5"
+                              Fill="Transparent"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.5"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round"
+                              Stretch="Uniform"/>
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <Grid Grid.Row="1" Margin="20,14,20,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="2*"/>
+                    <ColumnDefinition Width="1.25*"/>
+                    <ColumnDefinition Width="1.25*"/>
+                    <ColumnDefinition Width="1.25*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                    <TextBlock Foreground="#6E7890" FontSize="10" FontWeight="SemiBold" Text="KERNEL"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,7,0,0">
+                        <Ellipse x:Name="KernelPulse" Width="8" Height="8" Fill="#6BE5A9" Margin="0,0,8,0"/>
+                        <TextBlock x:Name="KernelStatusText" FontSize="17" FontWeight="SemiBold"/>
+                    </StackPanel>
+                    <TextBlock x:Name="KernelMetaText" Margin="16,5,0,0" Foreground="#778199" FontSize="10"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Margin="18,0,0,0">
+                    <TextBlock Foreground="#6E7890" FontSize="10" Text="执行模式"/>
+                    <TextBlock x:Name="ModeText" Margin="0,6,0,0" Foreground="#75F0FF"
+                               FontSize="18" FontWeight="SemiBold"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Margin="18,0,0,0">
+                    <TextBlock Foreground="#6E7890" FontSize="10" Text="服务健康"/>
+                    <TextBlock x:Name="ServiceSummaryText" Margin="0,6,0,0"
+                               FontSize="18" FontWeight="SemiBold"/>
+                </StackPanel>
+                <StackPanel Grid.Column="3" Margin="18,0,0,0">
+                    <TextBlock Foreground="#6E7890" FontSize="10" Text="任务图进度"/>
+                    <TextBlock x:Name="GraphProgressText" Margin="0,6,0,0"
+                               Foreground="#BDA8FF" FontSize="18" FontWeight="SemiBold"/>
+                </StackPanel>
+            </Grid>
+
+            <Grid Grid.Row="2" Margin="20,0,20,20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.05*"/>
+                    <ColumnDefinition Width="1.55*"/>
+                    <ColumnDefinition Width="1.15*"/>
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Style="{StaticResource PanelCard}" Margin="0,0,10,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Margin="0,0,0,13">
+                            <TextBlock FontSize="14" FontWeight="SemiBold" Text="系统服务"/>
+                            <TextBlock Margin="0,4,0,0" Foreground="#687289" FontSize="10"
+                                       Text="运行时、工作区、工具、MCP 与证据链"/>
+                        </StackPanel>
+                        <ListBox x:Name="ServicesList" Grid.Row="1"
+                                 Background="Transparent" BorderThickness="0"
+                                 ItemContainerStyle="{StaticResource ServiceItem}"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="#10151F" BorderBrush="#212A3A"
+                                            BorderThickness="1" CornerRadius="9" Padding="10">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Ellipse Width="7" Height="7" Margin="0,4,10,0"
+                                                     VerticalAlignment="Top">
+                                                <Ellipse.Style>
+                                                    <Style TargetType="Ellipse">
+                                                        <Setter Property="Fill" Value="#768096"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Health}" Value="{x:Static models:AgentOsServiceHealth.Ready}">
+                                                                <Setter Property="Fill" Value="#6BE5A9"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Health}" Value="{x:Static models:AgentOsServiceHealth.Degraded}">
+                                                                <Setter Property="Fill" Value="#FFC470"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Health}" Value="{x:Static models:AgentOsServiceHealth.Offline}">
+                                                                <Setter Property="Fill" Value="#FF7187"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Ellipse.Style>
+                                            </Ellipse>
+                                            <StackPanel Grid.Column="1">
+                                                <Grid>
+                                                    <TextBlock FontSize="11.5" FontWeight="SemiBold" Text="{Binding Name}"/>
+                                                    <TextBlock HorizontalAlignment="Right" Foreground="#677188"
+                                                               FontSize="9" Text="{Binding Health}"/>
+                                                </Grid>
+                                                <TextBlock Margin="0,3,0,0" Foreground="#7D879C" FontSize="9.5"
+                                                           Text="{Binding Detail}" TextTrimming="CharacterEllipsis"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Column="1" Style="{StaticResource PanelCard}" Margin="0,0,10,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock FontSize="14" FontWeight="SemiBold" Text="实时任务图"/>
+                        <TextBlock x:Name="GraphTitleText" Grid.Row="1" Margin="0,4,0,13"
+                                   Foreground="#687289" FontSize="10" Text="暂无活动任务"/>
+                        <ListBox x:Name="GraphList" Grid.Row="2" Background="Transparent"
+                                 BorderThickness="0" ItemContainerStyle="{StaticResource ServiceItem}"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource NodeSurface}">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="29"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Border Width="23" Height="23" CornerRadius="12"
+                                                    Background="#1D2636" VerticalAlignment="Top">
+                                                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                           Foreground="#75F0FF" FontSize="9" Text="{Binding Progress, StringFormat={}{0:0}}"/>
+                                            </Border>
+                                            <StackPanel Grid.Column="1">
+                                                <Grid>
+                                                    <TextBlock FontSize="11.5" FontWeight="SemiBold" Text="{Binding Title}"/>
+                                                    <TextBlock HorizontalAlignment="Right" Foreground="#7A86A0"
+                                                               FontSize="9" Text="{Binding State}"/>
+                                                </Grid>
+                                                <TextBlock Margin="0,3,0,0" Foreground="#A68FF0" FontSize="9"
+                                                           Text="{Binding Role}"/>
+                                                <TextBlock Margin="0,4,0,0" Foreground="#788299" FontSize="9.5"
+                                                           Text="{Binding Detail}" TextWrapping="Wrap"/>
+                                                <ProgressBar Margin="0,8,0,0" Height="2" Minimum="0" Maximum="100"
+                                                             Value="{Binding Progress}" BorderThickness="0"
+                                                             Background="#242B3A" Foreground="#75F0FF"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+                </Border>
+
+                <Grid Grid.Column="2">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="205"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Border Grid.Row="0" Style="{StaticResource PanelCard}" Margin="0,0,0,10">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock FontSize="14" FontWeight="SemiBold" Text="资源治理"/>
+                            <UniformGrid Grid.Row="1" Columns="2" Margin="0,12,0,0">
+                                <StackPanel>
+                                    <TextBlock Foreground="#6E7890" FontSize="9" Text="活动 Agent"/>
+                                    <TextBlock x:Name="AgentsText" Margin="0,4,0,0" FontSize="18" FontWeight="SemiBold"/>
+                                </StackPanel>
+                                <StackPanel>
+                                    <TextBlock Foreground="#6E7890" FontSize="9" Text="工具调用"/>
+                                    <TextBlock x:Name="ToolsText" Margin="0,4,0,0" FontSize="18" FontWeight="SemiBold"/>
+                                </StackPanel>
+                                <StackPanel>
+                                    <TextBlock Foreground="#6E7890" FontSize="9" Text="模型轮次"/>
+                                    <TextBlock x:Name="RoundsText" Margin="0,4,0,0" FontSize="18" FontWeight="SemiBold"/>
+                                </StackPanel>
+                                <StackPanel>
+                                    <TextBlock Foreground="#6E7890" FontSize="9" Text="执行闸门"/>
+                                    <TextBlock x:Name="BudgetText" Margin="0,4,0,0" Foreground="#75F0FF"
+                                               FontSize="18" FontWeight="SemiBold"/>
+                                </StackPanel>
+                            </UniformGrid>
+                        </Grid>
+                    </Border>
+                    <Border Grid.Row="1" Style="{StaticResource PanelCard}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <StackPanel Margin="0,0,0,10">
+                                <TextBlock FontSize="14" FontWeight="SemiBold" Text="内核事件账本"/>
+                                <TextBlock Margin="0,4,0,0" Foreground="#687289" FontSize="10"
+                                           Text="状态变化与执行证据按序记录"/>
+                            </StackPanel>
+                            <ListBox x:Name="EventsList" Grid.Row="1" Background="Transparent"
+                                     BorderThickness="0" ItemContainerStyle="{StaticResource ServiceItem}"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="44"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Foreground="#586279" FontSize="8.5"
+                                                       Text="{Binding Timestamp, StringFormat={}{0:HH:mm:ss}}"/>
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Foreground="#8C97AD" FontSize="9"
+                                                           Text="{Binding Source}"/>
+                                                <TextBlock Margin="0,2,0,0" Foreground="#C2CAD8" FontSize="9.5"
+                                                           Text="{Binding Message}" TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

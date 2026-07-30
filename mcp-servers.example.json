@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "servers": [
+    {
+      "name": "example-node-server",
+      "transport": "stdio",
+      "command": "node",
+      "arguments": [
+        "D:\\path\\to\\your-mcp-server.js"
+      ],
+      "workingDirectory": "D:\\Agent",
+      "enabled": false,
+      "environmentVariables": {
+        "SERVICE_API_KEY": "MY_EXISTING_SERVICE_API_KEY"
+      }
+    },
+    {
+      "name": "example-remote-server",
+      "transport": "http",
+      "url": "https://mcp.example.com/mcp",
+      "enabled": false,
+      "headers": {
+        "Authorization": "MY_EXISTING_MCP_AUTH_HEADER"
+      }
+    }
+  ]
+}

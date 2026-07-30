@@ -1,0 +1,267 @@
+<Window x:Class="NovaDesktop.QuickStartWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NOVA 快速开始"
+        Width="780"
+        Height="610"
+        MinWidth="700"
+        MinHeight="560"
+        WindowStartupLocation="CenterOwner"
+        WindowStyle="None"
+        ResizeMode="CanResize"
+        AllowsTransparency="True"
+        Background="Transparent"
+        FontFamily="Segoe UI Variable Text, Segoe UI"
+        Foreground="#E8ECF5">
+    <Window.Resources>
+        <Style x:Key="StepButton" TargetType="Button">
+            <Setter Property="Padding" Value="12,7"/>
+            <Setter Property="Background" Value="#182335"/>
+            <Setter Property="Foreground" Value="#D8E0EC"/>
+            <Setter Property="BorderBrush" Value="#35445F"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface"
+                                Padding="{TemplateBinding Padding}"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#22314A"/>
+                                <Setter TargetName="Surface" Property="BorderBrush" Value="#75F0FF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="PrimaryStepButton" TargetType="Button" BasedOn="{StaticResource StepButton}">
+            <Setter Property="Background" Value="#75F0FF"/>
+            <Setter Property="Foreground" Value="#071014"/>
+            <Setter Property="BorderBrush" Value="#75F0FF"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+        <Style x:Key="StepCard" TargetType="Border">
+            <Setter Property="Margin" Value="0,0,0,9"/>
+            <Setter Property="Padding" Value="14,12"/>
+            <Setter Property="Background" Value="#111823"/>
+            <Setter Property="BorderBrush" Value="#29354A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="11"/>
+        </Style>
+    </Window.Resources>
+
+    <Border Background="#FA0A0E15"
+            BorderBrush="#3A475F"
+            BorderThickness="1"
+            CornerRadius="16">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="58"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <Grid Grid.Row="0"
+                  Background="#D5101620"
+                  MouseLeftButtonDown="Header_MouseLeftButtonDown">
+                <StackPanel Margin="20,0,0,0" VerticalAlignment="Center">
+                    <TextBlock FontSize="14" FontWeight="SemiBold" Text="快速开始"/>
+                    <TextBlock Margin="0,3,0,0"
+                               FontSize="9.5"
+                               Foreground="#778198"
+                               Text="四步进入第一次真实执行 · 所有高影响动作仍需授权"/>
+                </StackPanel>
+                <Button HorizontalAlignment="Right"
+                        Width="48"
+                        Background="Transparent"
+                        Foreground="#9AA5B9"
+                        BorderThickness="0"
+                        FontFamily="Segoe Fluent Icons"
+                        FontSize="13"
+                        Cursor="Hand"
+                        Click="Close_Click"
+                        Content="&#xE8BB;"/>
+            </Grid>
+
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                <Grid Margin="22,18,22,22">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="16"/>
+                        <ColumnDefinition Width="260"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel>
+                        <TextBlock FontSize="21"
+                                   FontWeight="SemiBold"
+                                   Text="先完成一个小闭环"/>
+                        <TextBlock Margin="0,7,0,16"
+                                   FontSize="10.5"
+                                   LineHeight="17"
+                                   Foreground="#8290A7"
+                                   TextWrapping="Wrap"
+                                   Text="无需先理解 AgentOS、任务图或工具协议。准备好工作区和模型后，直接让 NOVA 审查一个真实项目。"/>
+
+                        <Border Style="{StaticResource StepCard}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="34"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Width="26" Height="26" Background="#163041" CornerRadius="8">
+                                    <TextBlock HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               FontSize="10"
+                                               FontWeight="Bold"
+                                               Foreground="#75F0FF"
+                                               Text="1"/>
+                                </Border>
+                                <StackPanel Grid.Column="1" Margin="10,0,12,0">
+                                    <TextBlock FontSize="11.5" FontWeight="SemiBold" Text="确认任务根目录"/>
+                                    <TextBlock x:Name="WorkspaceStatusText"
+                                               Margin="0,4,0,0"
+                                               MaxWidth="310"
+                                               FontSize="9"
+                                               Foreground="#7F8CA3"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                                <Button Grid.Column="2"
+                                        Style="{StaticResource StepButton}"
+                                        Click="Workspace_Click"
+                                        Content="选择"/>
+                            </Grid>
+                        </Border>
+
+                        <Border Style="{StaticResource StepCard}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="34"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Width="26" Height="26" Background="#241D3D" CornerRadius="8">
+                                    <TextBlock HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               FontSize="10"
+                                               FontWeight="Bold"
+                                               Foreground="#BDA8FF"
+                                               Text="2"/>
+                                </Border>
+                                <StackPanel Grid.Column="1" Margin="10,0,12,0">
+                                    <TextBlock FontSize="11.5" FontWeight="SemiBold" Text="连接执行模型"/>
+                                    <TextBlock x:Name="ModelStatusText"
+                                               Margin="0,4,0,0"
+                                               FontSize="9"
+                                               Foreground="#7F8CA3"/>
+                                </StackPanel>
+                                <Button Grid.Column="2"
+                                        Style="{StaticResource StepButton}"
+                                        Click="Model_Click"
+                                        Content="设置"/>
+                            </Grid>
+                        </Border>
+
+                        <Border Style="{StaticResource StepCard}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="34"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Width="26" Height="26" Background="#173028" CornerRadius="8">
+                                    <TextBlock HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               FontSize="10"
+                                               FontWeight="Bold"
+                                               Foreground="#6BE5A9"
+                                               Text="3"/>
+                                </Border>
+                                <StackPanel Grid.Column="1" Margin="10,0,12,0">
+                                    <TextBlock FontSize="11.5" FontWeight="SemiBold" Text="按需接入工具"/>
+                                    <TextBlock x:Name="ExtensionStatusText"
+                                               Margin="0,4,0,0"
+                                               FontSize="9"
+                                               Foreground="#7F8CA3"/>
+                                </StackPanel>
+                                <Button Grid.Column="2"
+                                        Style="{StaticResource StepButton}"
+                                        Click="Extensions_Click"
+                                        Content="发现 MCP"/>
+                            </Grid>
+                        </Border>
+
+                        <Border Style="{StaticResource StepCard}" Margin="0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="34"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Border Width="26" Height="26" Background="#382A18" CornerRadius="8">
+                                    <TextBlock HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               FontSize="10"
+                                               FontWeight="Bold"
+                                               Foreground="#FFC470"
+                                               Text="4"/>
+                                </Border>
+                                <StackPanel Grid.Column="1" Margin="10,0,12,0">
+                                    <TextBlock FontSize="11.5" FontWeight="SemiBold" Text="从可验证目标开始"/>
+                                    <TextBlock Margin="0,4,0,0"
+                                               FontSize="9"
+                                               Foreground="#7F8CA3"
+                                               Text="自动填入工程体检目标，你可以继续修改"/>
+                                </StackPanel>
+                                <Button Grid.Column="2"
+                                        Style="{StaticResource PrimaryStepButton}"
+                                        Click="StarterGoal_Click"
+                                        Content="填入目标"/>
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+
+                    <Border Grid.Column="2"
+                            Background="#0F1621"
+                            BorderBrush="#2B3850"
+                            BorderThickness="1"
+                            CornerRadius="12"
+                            Padding="16">
+                        <StackPanel>
+                            <TextBlock FontSize="10"
+                                       FontWeight="SemiBold"
+                                       Foreground="#75F0FF"
+                                       Text="NOVA 的差异化工作方式"/>
+                            <TextBlock Margin="0,10,0,0"
+                                       FontSize="15"
+                                       FontWeight="SemiBold"
+                                       TextWrapping="Wrap"
+                                       Text="不是另一个聊天壳，而是本地任务操作层"/>
+                            <TextBlock Margin="0,15,0,0"
+                                       FontSize="9.5"
+                                       LineHeight="19"
+                                       Foreground="#8B98AE"
+                                       TextWrapping="Wrap"
+                                       Text="任务图编排&#x0a;把目标、子任务、依赖和进度做成可恢复状态。&#x0a;&#x0a;证据化交付&#x0a;代码、Diff、测试结果与授权记录留在同一时间线。&#x0a;&#x0a;本地认知闭环&#x0a;效率总结、知识图谱和工作区记忆随任务积累。&#x0a;&#x0a;开放互操作&#x0a;可发现其他客户端的 MCP 配置，但不会静默接管或执行。"/>
+                            <Border Margin="0,18,0,0"
+                                    Padding="10"
+                                    Background="#131E2C"
+                                    CornerRadius="8">
+                                <TextBlock FontSize="9"
+                                           Foreground="#718099"
+                                           TextWrapping="Wrap"
+                                           Text="建议第一次只完成一个 5–15 分钟的小目标。成功后再打开 AgentOS 和认知中心探索高级能力。"/>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </ScrollViewer>
+        </Grid>
+    </Border>
+</Window>
