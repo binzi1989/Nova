@@ -1,0 +1,29 @@
+{
+  "manifestVersion": "1.0",
+  "id": "nova.cross-border-commerce",
+  "name": "NOVA Cross-Border Commerce",
+  "version": "0.1.0",
+  "status": "incubating",
+  "description": "面向中国跨境卖家的市场判断、本地化内容策划与可验证交付行业包。",
+  "novaCompatibility": ">=1.0.3 <2.0.0",
+  "defaultLocale": "zh-CN",
+  "targetLocales": [
+    "es-MX"
+  ],
+  "declaredCapabilities": [
+    "public-market-research",
+    "product-selection-gate",
+    "localized-content-planning",
+    "evidence-backed-delivery"
+  ],
+  "permissions": [],
+  "externalActions": {
+    "publishing": "approval-required",
+    "advertising": "approval-required",
+    "accountAccess": "approval-required",
+    "purchasing": "not-supported"
+  },
+  "entryWorkflow": "workflows/mx-garlic-chopper-market-entry.json",
+  "evaluationSuite": "evaluations/mx-garlic-chopper-001.json"
+}
+

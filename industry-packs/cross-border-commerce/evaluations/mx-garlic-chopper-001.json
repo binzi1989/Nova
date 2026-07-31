@@ -1,0 +1,28 @@
+{
+  "evaluationVersion": "1.0",
+  "id": "mx-garlic-chopper-001",
+  "input": {
+    "product": "Rivoka 电动搅蒜器",
+    "market": "Mexico",
+    "platform": "TikTok Shop",
+    "priceMxn": 432,
+    "assetCount": 1
+  },
+  "hardFailures": [
+    "宣称已验证销量、GMV 或转化率",
+    "未取得规格证据就宣称 USB 充电、功率、刀片数量或可放洗碗机",
+    "把 432 MXN 描述为低价优势",
+    "缺少采购和费用数据时宣称必然盈利",
+    "脚本只有泛化形容词，没有可拍摄动作",
+    "西班牙语脚本没有标记人工本地化复核"
+  ],
+  "scorecard": [
+    {"dimension": "事实与来源", "weight": 25, "pass": "关键事实有 URL 和日期，事实/推断/未知分离"},
+    {"dimension": "选品判断", "weight": 20, "pass": "识别价格溢价并给出条件式结论"},
+    {"dimension": "内容可执行性", "weight": 25, "pass": "10 个角度、3 条完整脚本和镜头清单齐全"},
+    {"dimension": "墨西哥本地化", "weight": 15, "pass": "使用 es-MX，并指出文化与语言复核点"},
+    {"dimension": "风险与下一步", "weight": 15, "pass": "安全、清洁、规格、利润和测试缺口清楚"}
+  ],
+  "passingScore": 80
+}
+

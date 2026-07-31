@@ -1,0 +1,45 @@
+{
+  "caseId": "mx-garlic-chopper-001",
+  "capturedAt": "2026-08-01",
+  "customerFacts": {
+    "product": "搅蒜器",
+    "brand": "Rivoka",
+    "targetPriceMxn": 432,
+    "timeConsumingJobs": [
+      "宣传视频制作",
+      "市场探查",
+      "期初选品"
+    ]
+  },
+  "observedFromImage": [
+    "白色按压式电机上盖",
+    "透明容器",
+    "可见多层金属刀片",
+    "机身可见 rivoka 品牌字样"
+  ],
+  "sourcedFacts": [
+    {
+      "fact": "公开页面将同款描述为 Rivoka 360ml 玻璃杯多用途迷你电动切碎机，型号字段为 SRO1；页面抓取时显示不可售。",
+      "source": "https://www.mercadolibre.com.mx/rivoka-mini-picadora-electrica-vidrio-360ml-multiusos/up/MLMU3740547607"
+    },
+    {
+      "fact": "Mercado Libre 搜索快照包含大量约 77–234 MXN 的低价迷你电动款，也包含约 366、426、463、636 和 661 MXN 的中高价或品牌款。",
+      "source": "https://listado.mercadolibre.com.mx/mini-picadora-el%C3%A8ctrica"
+    },
+    {
+      "fact": "另一个 Mercado Libre 类目页显示 1,658 个相关结果，表明关键词竞争密集。",
+      "source": "https://listado.mercadolibre.com.mx/picador-de-ajo-el%C3%A9ctrico"
+    }
+  ],
+  "unverified": [
+    "实际容量是否为 360ml",
+    "容器是否为食品级玻璃",
+    "功率和电池容量",
+    "是否 USB 充电",
+    "刀片数量和不锈钢等级",
+    "是否可处理肉类、辣椒、洋葱、坚果或制作 salsa",
+    "可拆洗范围和洗碗机适用性",
+    "采购成本、物流、平台费用、保修与退货率"
+  ]
+}
+

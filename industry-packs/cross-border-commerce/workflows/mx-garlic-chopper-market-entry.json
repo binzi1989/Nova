@@ -1,0 +1,66 @@
+{
+  "workflowVersion": "1.0",
+  "id": "mx-garlic-chopper-market-entry",
+  "name": "墨西哥搅蒜器选品与 7 天内容作战包",
+  "executionMode": "goal",
+  "resultContract": "delivery-templates/weekly-growth-brief.md",
+  "steps": [
+    {
+      "id": "freeze-brief",
+      "agent": "任务指挥官",
+      "title": "冻结产品事实和未知项",
+      "dependsOn": [],
+      "outputs": ["mission-brief.json", "unknowns.json"],
+      "acceptance": ["事实、推断和未知项已分离", "售价和目标市场已确认"]
+    },
+    {
+      "id": "market-scan",
+      "agent": "市场侦察员",
+      "title": "建立市场和竞品证据账本",
+      "dependsOn": ["freeze-brief"],
+      "outputs": ["source-ledger.json", "price-bands.json"],
+      "acceptance": ["每个价格与卖点带来源和日期", "不把搜索结果数量解释成销量"]
+    },
+    {
+      "id": "selection-gate",
+      "agent": "选品分析师",
+      "title": "执行 GO / CONDITIONAL GO / NO-GO 闸门",
+      "dependsOn": ["market-scan"],
+      "outputs": ["selection-verdict.md"],
+      "acceptance": ["明确 432 MXN 的溢价依据", "成本缺失时不宣称盈利"]
+    },
+    {
+      "id": "scenario-map",
+      "agent": "墨西哥场景研究员",
+      "title": "建立本地料理和家庭使用场景",
+      "dependsOn": ["market-scan"],
+      "outputs": ["scenario-map.json"],
+      "acceptance": ["每个场景能转化为实拍动作", "避免文化刻板印象"]
+    },
+    {
+      "id": "content-pack",
+      "agent": "内容策划师",
+      "title": "生成 10 个角度、3 条脚本与 7 天计划",
+      "dependsOn": ["selection-gate", "scenario-map"],
+      "outputs": ["content-angles.json", "scripts-es-mx.md", "shoot-list.md", "calendar-7d.md"],
+      "acceptance": ["脚本只使用已证实卖点", "镜头在普通家庭厨房可执行"]
+    },
+    {
+      "id": "localization-review",
+      "agent": "本地化审查员",
+      "title": "审查 es-MX 表达和广告风险",
+      "dependsOn": ["content-pack"],
+      "outputs": ["localization-review.md"],
+      "acceptance": ["标出需要人工母语确认的句子", "没有未经证实的绝对化承诺"]
+    },
+    {
+      "id": "proof-of-done",
+      "agent": "交付审计员",
+      "title": "验证并组装最终作战包",
+      "dependsOn": ["localization-review"],
+      "outputs": ["weekly-growth-brief.md", "proof-of-done.json"],
+      "acceptance": ["固定八类交付物齐全", "来源可以打开", "未知项仍清晰可见"]
+    }
+  ]
+}
+
