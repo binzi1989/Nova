@@ -50,7 +50,12 @@ contextBridge.exposeInMainWorld("nova", {
     prepareEvolution: (request) => invoke("nova:prepare-evolution", request),
     evaluateEvolution: (request) => invoke("nova:evaluate-evolution", request),
     adoptEvolution: (request) => invoke("nova:adopt-evolution", request),
-    rejectEvolution: (request) => invoke("nova:reject-evolution", request)
+    rejectEvolution: (request) => invoke("nova:reject-evolution", request),
+    onEvolutionEvent: (listener) => {
+      const handler = (_event, payload) => listener(payload);
+      ipcRenderer.on("nova:evolution-event", handler);
+      return () => ipcRenderer.removeListener("nova:evolution-event", handler);
+    }
   },
   window: {
     minimize: () => invoke("nova:window-minimize"),

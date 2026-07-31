@@ -2222,6 +2222,41 @@ select:focus-visible {
   cursor: pointer;
 }
 
+.evolution-discovery-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -2px 0 12px;
+  padding: 9px 11px;
+  border-left: 2px solid #7f9270;
+  background: #171a15;
+}
+
+.evolution-discovery-status > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.evolution-discovery-status strong {
+  overflow: hidden;
+  color: #cbd3c2;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evolution-discovery-status small,
+.evolution-discovery-status > span {
+  color: #7e8876;
+  font-size: 8px;
+}
+
+.evolution-discovery-status > span {
+  flex: 0 0 auto;
+}
+
 .evolution-proposal {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

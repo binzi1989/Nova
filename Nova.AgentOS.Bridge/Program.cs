@@ -114,6 +114,10 @@ internal sealed class AgentOsBridgeHost : IDisposable
     private readonly ConcurrentDictionary<string, byte> _agentRuns =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _bootGate = new(1, 1);
+    private readonly CancellationTokenSource _lifetime = new();
+    private Task? _evolutionDiscoveryLoop;
+    private long _lastForegroundActivityUnixMs =
+        DateTimeOffset.Now.ToUnixTimeMilliseconds();
     private bool _booted;
 
     public AgentOsBridgeHost(Func<string, object, Task> publish)
@@ -125,7 +129,15 @@ internal sealed class AgentOsBridgeHost : IDisposable
     }
 
     public async Task<object?> ExecuteAsync(string method, JsonObject parameters)
-        => method switch
+    {
+        if (IsForegroundActivity(method))
+        {
+            Interlocked.Exchange(
+                ref _lastForegroundActivityUnixMs,
+                DateTimeOffset.Now.ToUnixTimeMilliseconds());
+        }
+
+        return method switch
         {
             "boot" => await BootAsync(),
             "health" => await HealthAsync(),
@@ -165,6 +177,7 @@ internal sealed class AgentOsBridgeHost : IDisposable
                 RequiredString(parameters, "id")),
             _ => throw new InvalidOperationException($"Unknown bridge method: {method}")
         };
+    }
 
     private async Task<object> BootAsync()
     {
@@ -187,6 +200,8 @@ internal sealed class AgentOsBridgeHost : IDisposable
                     "Electron bridge lease layer active",
                     boot.BootId);
                 _booted = true;
+                _evolutionDiscoveryLoop = RunEvolutionDiscoveryLoopAsync(
+                    _lifetime.Token);
             }
         }
         finally
@@ -195,6 +210,68 @@ internal sealed class AgentOsBridgeHost : IDisposable
         }
 
         return ProjectKernel();
+    }
+
+    private async Task RunEvolutionDiscoveryLoopAsync(
+        CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                try
+                {
+                    if (_active.Count > 0 || _agentRuns.Count > 0)
+                    {
+                        continue;
+                    }
+
+                    var lastActivity = DateTimeOffset.FromUnixTimeMilliseconds(
+                        Interlocked.Read(ref _lastForegroundActivityUnixMs));
+                    if (DateTimeOffset.Now - lastActivity < TimeSpan.FromMinutes(10))
+                    {
+                        continue;
+                    }
+
+                    var discovery = await _evolutionLab.TryDiscoverCandidateAsync(
+                        _snapshots.LoadAll(),
+                        cancellationToken: cancellationToken);
+                    if (!discovery.Scanned)
+                    {
+                        continue;
+                    }
+
+                    await _publish("evolution_event", new
+                    {
+                        kind = discovery.Candidate is null ? "scan" : "candidate",
+                        candidateId = discovery.Candidate?.Id,
+                        objective = discovery.Candidate?.Objective,
+                        discovery.Snapshot.DiscoveryStatus,
+                        discovery.Snapshot.LastDiscoveryAt,
+                        discovery.Snapshot.NextDiscoveryAt
+                    });
+                }
+                catch (OperationCanceledException) when (
+                    cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    await _publish("evolution_event", new
+                    {
+                        kind = "error",
+                        discoveryStatus = $"自动发现本轮失败，将在下个检查周期重试：{exception.Message}",
+                        lastDiscoveryAt = DateTimeOffset.Now
+                    });
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Normal bridge shutdown.
+        }
     }
 
     private async Task<object> HealthAsync()
@@ -1198,11 +1275,29 @@ internal sealed class AgentOsBridgeHost : IDisposable
             ? TaskState.Paused
             : state;
 
+    private static bool IsForegroundActivity(string method)
+        => method is
+            "start_task"
+            or "run_agent"
+            or "verify_result"
+            or "task_event"
+            or "complete_task"
+            or "propose_evolution"
+            or "prepare_evolution"
+            or "evaluate_evolution"
+            or "adopt_evolution"
+            or "reject_evolution"
+            or "configure_evolution_lab";
+
     private static string NormalizeRecoveredStage(TaskState state, string stage)
         => state is TaskState.Running or TaskState.Waiting or TaskState.BudgetExhausted
             ? "Previous host stopped; task is safely paused"
             : stage;
 
     public void Dispose()
-        => _supervisor.Dispose();
+    {
+        _lifetime.Cancel();
+        _supervisor.Dispose();
+        _lifetime.Dispose();
+    }
 }

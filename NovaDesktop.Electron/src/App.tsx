@@ -40,6 +40,7 @@ import type {
   BootInfo,
   CapabilityState,
   DesktopSnapshot,
+  EvolutionDiscoveryEvent,
   EvolutionLabState,
   LivingMemoryState,
   ExecutionMode,
@@ -98,6 +99,23 @@ function now() {
     hour: "2-digit",
     minute: "2-digit"
   });
+}
+
+function formatLocalDateTime(value?: string | null) {
+  if (!value) return "尚未安排";
+  return new Date(value).toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function formatDiscoveryWindow(value?: string | null) {
+  if (!value) return "等待首次扫描";
+  return new Date(value).getTime() <= Date.now()
+    ? "已到扫描窗口，等待应用空闲"
+    : `下次窗口 ${formatLocalDateTime(value)}`;
 }
 
 function readableRunError(error: unknown) {
@@ -608,6 +626,24 @@ function App() {
         streamFlushTimer.current = null;
       }
     };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.nova.growth.onEvolutionEvent(
+      async (event: EvolutionDiscoveryEvent) => {
+        try {
+          setEvolutionLab(await window.nova.growth.getEvolutionLab());
+        } catch {
+          // The persisted state will be loaded the next time the growth hub opens.
+        }
+        if (event.kind === "candidate") {
+          setNotice("Evolution Lab 已生成一个本地改进候选，等待你的审阅");
+        } else if (event.kind === "error") {
+          setNotice(event.discoveryStatus);
+        }
+      }
+    );
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -1821,6 +1857,22 @@ function App() {
                           <button type="submit" disabled={growthLoading}>保存开关与预算</button>
                         </div>
                       </form>
+                    )}
+
+                    {evolutionLab && (
+                      <div className="evolution-discovery-status">
+                        <div>
+                          <strong>{evolutionLab.discoveryStatus}</strong>
+                          <small>
+                            最近扫描 {formatLocalDateTime(evolutionLab.lastDiscoveryAt)}
+                          </small>
+                        </div>
+                        <span>
+                          {evolutionLab.policy.scheduledDiscoveryEnabled
+                            ? formatDiscoveryWindow(evolutionLab.nextDiscoveryAt)
+                            : "自动发现未启用"}
+                        </span>
+                      </div>
                     )}
 
                     <form

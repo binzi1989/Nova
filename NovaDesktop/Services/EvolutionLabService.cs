@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using NovaDesktop.Models;
 
 namespace NovaDesktop.Services;
 
@@ -72,7 +73,16 @@ public sealed record EvolutionLabSnapshot(
     int AdoptedExperiments,
     int UsedTokensThisMonth,
     int RemainingTokensThisMonth,
-    string UsageMonth);
+    string UsageMonth,
+    DateTimeOffset? LastDiscoveryAt,
+    DateTimeOffset? NextDiscoveryAt,
+    string DiscoveryStatus,
+    string? LastDiscoveryCandidateId);
+
+public sealed record EvolutionDiscoveryResult(
+    EvolutionLabSnapshot Snapshot,
+    EvolutionExperiment? Candidate,
+    bool Scanned);
 
 public sealed record EvolutionRuntimeBudget(
     string ExperimentId,
@@ -84,11 +94,17 @@ internal sealed record EvolutionLabState(
     EvolutionLabPolicy Policy,
     IReadOnlyList<EvolutionExperiment> Experiments,
     string UsageMonth,
-    int UsedTokensThisMonth);
+    int UsedTokensThisMonth,
+    DateTimeOffset? LastDiscoveryAt = null,
+    string DiscoveryStatus = "自动发现尚未开启",
+    string? LastDiscoveryFingerprint = null,
+    string? LastDiscoveryCandidateId = null);
 
 public sealed class EvolutionLabService
 {
     private const long MaximumPluginBytes = 2L * 1024 * 1024;
+    private static readonly TimeSpan FirstDiscoveryDelay = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan DiscoveryInterval = TimeSpan.FromHours(6);
     private static readonly HashSet<string> AllowedPluginFiles = new(
         StringComparer.OrdinalIgnoreCase)
     {
@@ -173,16 +189,33 @@ public sealed class EvolutionLabService
         try
         {
             var state = NormalizeMonth(Load());
+            var wasScheduled = state.Policy.Enabled
+                               && state.Policy.ScheduledDiscoveryEnabled;
+            var willSchedule = enabled && scheduledDiscoveryEnabled;
             state = state with
             {
                 Policy = new EvolutionLabPolicy(
                     enabled,
-                    enabled && scheduledDiscoveryEnabled,
+                    willSchedule,
                     maxTokensPerExperiment,
                     monthlyTokenBudget,
                     maxExperimentsPerWeek,
                     maxModelRounds,
-                    DateTimeOffset.Now)
+                    DateTimeOffset.Now),
+                LastDiscoveryAt = willSchedule && wasScheduled
+                    ? state.LastDiscoveryAt
+                    : null,
+                DiscoveryStatus = willSchedule
+                    ? wasScheduled
+                        ? state.DiscoveryStatus
+                        : "等待应用空闲 10 分钟后进行首次本地扫描"
+                    : "自动发现已关闭",
+                LastDiscoveryFingerprint = willSchedule && wasScheduled
+                    ? state.LastDiscoveryFingerprint
+                    : null,
+                LastDiscoveryCandidateId = willSchedule && wasScheduled
+                    ? state.LastDiscoveryCandidateId
+                    : null
             };
             await SaveAsync(state, cancellationToken);
             return Project(state);
@@ -224,39 +257,134 @@ public sealed class EvolutionLabService
                     "月度自进化预算不足；可以等待下月或由用户调整预算。");
             }
 
-            var id = "evo-" + DateTimeOffset.Now.ToString("yyyyMMdd-HHmmss")
-                     + "-" + Guid.NewGuid().ToString("N")[..6];
-            var pluginId = "nova-evolved-" + id[4..];
-            var hypothesis =
-                $"把“{Limit(trimmedObjective, 180)}”封装成一个声明式能力插件，"
-                + "可以在不暴露、不复制且不修改 NOVA 核心源码的前提下验证它是否有价值。";
-            var prompt = BuildAgentPrompt(id, pluginId, trimmedObjective);
-            var experiment = new EvolutionExperiment(
-                id,
-                trimmedObjective,
-                hypothesis,
+            var experiment = CreateProposedExperiment(
                 contextWorkspace,
-                null,
-                EvolutionExperimentState.Proposed,
-                "declarative-plugin",
-                prompt,
-                new Dictionary<string, string>(),
-                [],
-                "等待插件沙箱验证",
-                null,
-                "仅创建了实验记录；没有调用模型，也没有读取或复制核心源码。",
-                [],
+                trimmedObjective,
                 state.Policy.MaxTokensPerExperiment,
-                0,
-                DateTimeOffset.Now,
-                DateTimeOffset.Now,
-                null);
+                "仅创建了实验记录；没有调用模型，也没有读取或复制核心源码。",
+                DateTimeOffset.Now);
             state = state with
             {
                 Experiments = state.Experiments.Append(experiment).ToArray()
             };
             await SaveAsync(state, cancellationToken);
             return Project(state);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<EvolutionDiscoveryResult> TryDiscoverCandidateAsync(
+        IReadOnlyList<TaskSnapshot> tasks,
+        DateTimeOffset? now = null,
+        CancellationToken cancellationToken = default)
+    {
+        var timestamp = now ?? DateTimeOffset.Now;
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var state = NormalizeMonth(Load());
+            if (!state.Policy.Enabled || !state.Policy.ScheduledDiscoveryEnabled)
+            {
+                return new EvolutionDiscoveryResult(Project(state), null, false);
+            }
+
+            var nextDiscoveryAt = NextDiscoveryAt(state);
+            if (nextDiscoveryAt is not null && timestamp < nextDiscoveryAt)
+            {
+                return new EvolutionDiscoveryResult(Project(state), null, false);
+            }
+
+            var pendingReview = state.Experiments.Any(item => item.State is
+                EvolutionExperimentState.Proposed
+                or EvolutionExperimentState.Ready
+                or EvolutionExperimentState.Running
+                or EvolutionExperimentState.Evaluating
+                or EvolutionExperimentState.Passed);
+            if (pendingReview)
+            {
+                state = MarkDiscovery(
+                    state,
+                    timestamp,
+                    "等待现有候选完成审阅，不会继续堆积实验");
+                await SaveAsync(state, cancellationToken);
+                return new EvolutionDiscoveryResult(Project(state), null, true);
+            }
+
+            var recentCount = state.Experiments.Count(item =>
+                item.CreatedAt >= timestamp.AddDays(-7));
+            if (recentCount >= state.Policy.MaxExperimentsPerWeek)
+            {
+                state = MarkDiscovery(
+                    state,
+                    timestamp,
+                    $"本周已达到 {state.Policy.MaxExperimentsPerWeek} 个实验上限");
+                await SaveAsync(state, cancellationToken);
+                return new EvolutionDiscoveryResult(Project(state), null, true);
+            }
+
+            if (state.UsedTokensThisMonth + state.Policy.MaxTokensPerExperiment
+                > state.Policy.MonthlyTokenBudget)
+            {
+                state = MarkDiscovery(
+                    state,
+                    timestamp,
+                    "月度预算不足，本轮没有创建候选");
+                await SaveAsync(state, cancellationToken);
+                return new EvolutionDiscoveryResult(Project(state), null, true);
+            }
+
+            var signal = FindDiscoverySignal(tasks, timestamp);
+            if (signal is null)
+            {
+                state = MarkDiscovery(
+                    state,
+                    timestamp,
+                    "本轮未发现足够强的重复或恢复信号");
+                await SaveAsync(state, cancellationToken);
+                return new EvolutionDiscoveryResult(Project(state), null, true);
+            }
+
+            var duplicate = state.LastDiscoveryFingerprint == signal.Fingerprint
+                            || state.Experiments.Any(item =>
+                                item.SourceWorkspace.Equals(
+                                    signal.WorkspaceRoot,
+                                    StringComparison.OrdinalIgnoreCase)
+                                && item.Objective.Equals(
+                                    signal.Objective,
+                                    StringComparison.Ordinal)
+                                && item.CreatedAt >= timestamp.AddDays(-30));
+            if (duplicate)
+            {
+                state = MarkDiscovery(
+                    state,
+                    timestamp,
+                    "近期同类候选已经存在，本轮已自动去重",
+                    signal.Fingerprint);
+                await SaveAsync(state, cancellationToken);
+                return new EvolutionDiscoveryResult(Project(state), null, true);
+            }
+
+            var experiment = CreateProposedExperiment(
+                signal.WorkspaceRoot,
+                signal.Objective,
+                state.Policy.MaxTokensPerExperiment,
+                $"由定时本地发现生成：{signal.Evidence}。"
+                + "仅分析任务快照元数据，未调用模型、未复制源码、未安装能力。",
+                timestamp);
+            state = MarkDiscovery(
+                state with
+                {
+                    Experiments = state.Experiments.Append(experiment).ToArray()
+                },
+                timestamp,
+                "已生成 1 个本地候选，等待用户审阅",
+                signal.Fingerprint,
+                experiment.Id);
+            await SaveAsync(state, cancellationToken);
+            return new EvolutionDiscoveryResult(Project(state), experiment, true);
         }
         finally
         {
@@ -797,6 +925,144 @@ public sealed class EvolutionLabService
         return Path.GetFullPath(experiment.IsolatedWorkspace);
     }
 
+    private static EvolutionExperiment CreateProposedExperiment(
+        string workspaceRoot,
+        string objective,
+        int tokenBudget,
+        string evidence,
+        DateTimeOffset timestamp)
+    {
+        var id = "evo-" + timestamp.ToString("yyyyMMdd-HHmmss")
+                 + "-" + Guid.NewGuid().ToString("N")[..6];
+        var pluginId = "nova-evolved-" + id[4..];
+        var hypothesis =
+            $"把“{Limit(objective, 180)}”封装成一个声明式能力插件，"
+            + "可以在不暴露、不复制且不修改 NOVA 核心源码的前提下验证它是否有价值。";
+        return new EvolutionExperiment(
+            id,
+            objective,
+            hypothesis,
+            workspaceRoot,
+            null,
+            EvolutionExperimentState.Proposed,
+            "declarative-plugin",
+            BuildAgentPrompt(id, pluginId, objective),
+            new Dictionary<string, string>(),
+            [],
+            "等待插件沙箱验证",
+            null,
+            evidence,
+            [],
+            tokenBudget,
+            0,
+            timestamp,
+            timestamp,
+            null);
+    }
+
+    private static EvolutionDiscoverySignal? FindDiscoverySignal(
+        IReadOnlyList<TaskSnapshot> tasks,
+        DateTimeOffset timestamp)
+    {
+        var candidates = tasks
+            .Where(task =>
+                !task.IsArchived
+                && task.UpdatedAt >= timestamp.AddDays(-30)
+                && !string.IsNullOrWhiteSpace(task.WorkspaceRoot)
+                && Directory.Exists(task.WorkspaceRoot))
+            .GroupBy(
+                task => Path.GetFullPath(task.WorkspaceRoot),
+                StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var items = group.OrderByDescending(item => item.UpdatedAt).ToArray();
+                var friction = items.Count(item => item.State is
+                    TaskState.Failed
+                    or TaskState.BudgetExhausted
+                    or TaskState.Stale
+                    or TaskState.Cancelled);
+                return new
+                {
+                    WorkspaceRoot = group.Key,
+                    Items = items,
+                    Friction = friction,
+                    Score = friction * 10 + items.Length
+                };
+            })
+            .Where(group => group.Friction > 0 || group.Items.Length >= 2)
+            .OrderByDescending(group => group.Score)
+            .ThenByDescending(group => group.Items[0].UpdatedAt)
+            .ToArray();
+
+        var selected = candidates.FirstOrDefault();
+        if (selected is null)
+        {
+            return null;
+        }
+
+        var workspaceName = Path.GetFileName(
+            selected.WorkspaceRoot.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar));
+        if (string.IsNullOrWhiteSpace(workspaceName))
+        {
+            workspaceName = "当前工作区";
+        }
+
+        var kind = selected.Friction > 0 ? "recovery" : "workflow";
+        var objective = selected.Friction > 0
+            ? $"为 {workspaceName} 提炼可复用的任务恢复能力：根据近期 "
+              + $"{selected.Friction} 次失败、预算耗尽或中断记录，"
+              + "保留上下文和证据并给出最小可继续步骤。"
+            : $"为 {workspaceName} 提炼可复用的工作流能力：总结近期 "
+              + $"{selected.Items.Length} 个任务中的重复目标和操作习惯，"
+              + "减少重复说明并保持结果验证。";
+        var fingerprintSource = string.Join(
+            "\n",
+            new[]
+            {
+                selected.WorkspaceRoot.ToUpperInvariant(),
+                kind
+            }.Concat(selected.Items
+                .Take(8)
+                .Select(item => $"{item.TaskId}|{item.State}|{item.Title}")));
+        var fingerprint = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintSource)));
+        var evidence = selected.Friction > 0
+            ? $"近 30 天在该工作区发现 {selected.Friction} 个恢复信号"
+            : $"近 30 天在该工作区发现 {selected.Items.Length} 个可归纳任务";
+        return new EvolutionDiscoverySignal(
+            selected.WorkspaceRoot,
+            objective,
+            evidence,
+            fingerprint);
+    }
+
+    private static EvolutionLabState MarkDiscovery(
+        EvolutionLabState state,
+        DateTimeOffset timestamp,
+        string status,
+        string? fingerprint = null,
+        string? candidateId = null)
+        => state with
+        {
+            LastDiscoveryAt = timestamp,
+            DiscoveryStatus = status,
+            LastDiscoveryFingerprint = fingerprint ?? state.LastDiscoveryFingerprint,
+            LastDiscoveryCandidateId = candidateId ?? state.LastDiscoveryCandidateId
+        };
+
+    private static DateTimeOffset? NextDiscoveryAt(EvolutionLabState state)
+    {
+        if (!state.Policy.Enabled || !state.Policy.ScheduledDiscoveryEnabled)
+        {
+            return null;
+        }
+        return state.LastDiscoveryAt is null
+            ? state.Policy.UpdatedAt + FirstDiscoveryDelay
+            : state.LastDiscoveryAt + DiscoveryInterval;
+    }
+
     private EvolutionLabState Load()
     {
         try
@@ -824,9 +1090,25 @@ public sealed class EvolutionLabService
             0);
 
     private static EvolutionLabState NormalizeMonth(EvolutionLabState state)
-        => state.UsageMonth == CurrentMonth()
+    {
+        var normalized = state.UsageMonth == CurrentMonth()
             ? state
             : state with { UsageMonth = CurrentMonth(), UsedTokensThisMonth = 0 };
+        if (string.IsNullOrWhiteSpace(normalized.DiscoveryStatus)
+            || (normalized.DiscoveryStatus == "自动发现尚未开启"
+                && normalized.Policy.Enabled
+                && normalized.Policy.ScheduledDiscoveryEnabled))
+        {
+            normalized = normalized with
+            {
+                DiscoveryStatus = normalized.Policy.Enabled
+                                  && normalized.Policy.ScheduledDiscoveryEnabled
+                    ? "等待应用空闲 10 分钟后进行首次本地扫描"
+                    : "自动发现已关闭"
+            };
+        }
+        return normalized;
+    }
 
     private async Task SaveAsync(
         EvolutionLabState state,
@@ -859,7 +1141,11 @@ public sealed class EvolutionLabService
             experiments.Count(item => item.State == EvolutionExperimentState.Adopted),
             state.UsedTokensThisMonth,
             Math.Max(0, state.Policy.MonthlyTokenBudget - state.UsedTokensThisMonth),
-            state.UsageMonth);
+            state.UsageMonth,
+            state.LastDiscoveryAt,
+            NextDiscoveryAt(state),
+            state.DiscoveryStatus,
+            state.LastDiscoveryCandidateId);
     }
 
     private static int FindIndex(IReadOnlyList<EvolutionExperiment> items, string id)
@@ -873,6 +1159,12 @@ public sealed class EvolutionLabService
         }
         throw new InvalidOperationException($"插件实验不存在：{id}");
     }
+
+    private sealed record EvolutionDiscoverySignal(
+        string WorkspaceRoot,
+        string Objective,
+        string Evidence,
+        string Fingerprint);
 
     private static string ResolveContained(string root, string relativePath)
     {

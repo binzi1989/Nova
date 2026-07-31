@@ -204,6 +204,19 @@ export interface EvolutionLabState {
   usedTokensThisMonth: number;
   remainingTokensThisMonth: number;
   usageMonth: string;
+  lastDiscoveryAt?: string | null;
+  nextDiscoveryAt?: string | null;
+  discoveryStatus: string;
+  lastDiscoveryCandidateId?: string | null;
+}
+
+export interface EvolutionDiscoveryEvent {
+  kind: "scan" | "candidate" | "error";
+  candidateId?: string | null;
+  objective?: string | null;
+  discoveryStatus: string;
+  lastDiscoveryAt?: string | null;
+  nextDiscoveryAt?: string | null;
 }
 
 export interface DesktopSnapshot {
@@ -324,6 +337,7 @@ export interface NovaApi {
     evaluateEvolution(request: { id: string }): Promise<EvolutionLabState>;
     adoptEvolution(request: { id: string }): Promise<EvolutionLabState>;
     rejectEvolution(request: { id: string }): Promise<EvolutionLabState>;
+    onEvolutionEvent(listener: (event: EvolutionDiscoveryEvent) => void): () => void;
   };
   window: {
     minimize(): Promise<void>;

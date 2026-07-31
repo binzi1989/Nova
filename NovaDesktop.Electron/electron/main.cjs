@@ -1109,6 +1109,9 @@ function createBridgeClient() {
     if (eventName === "agent_event" && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("nova:agent-event", payload);
     }
+    if (eventName === "evolution_event" && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("nova:evolution-event", payload);
+    }
   };
   return client;
 }

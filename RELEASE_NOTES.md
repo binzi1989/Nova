@@ -1,12 +1,12 @@
-# NOVA AgentOS 0.9.0-preview.29
+# NOVA AgentOS 1.0.2
 
-这是 NOVA AgentOS 面向真实桌面任务的 Preview 版本，提供 Electron 主交互壳和 .NET 8 AgentOS Bridge/Core。
+这是 NOVA AgentOS 的维护版本，提供 Electron 主交互壳和 .NET 8 AgentOS Bridge/Core。
 
 ## 下载选择
 
-- `NOVA-AgentOS-Electron-0.9.0-preview.29-...-win-x64.zip`：Windows x64 Electron 主体验；
-- `NOVA-AgentOS-Electron-0.9.0-preview.29-mac-arm64.zip`：Apple Silicon Electron 主体验；
-- `NOVA-AgentOS-Electron-0.9.0-preview.29-mac-x64.zip`：Intel Electron 主体验；
+- `NOVA-AgentOS-Electron-1.0.2-x64.zip`：Windows x64 Electron 主体验；
+- `NOVA-AgentOS-Electron-1.0.2-mac-arm64.zip`：Apple Silicon Electron 主体验；
+- `NOVA-AgentOS-Electron-1.0.2-mac-x64.zip`：Intel Electron 主体验；
 - 项目介绍 PPT 与项目说明书：产品、架构和 1.0 发布边界。
 
 ## 重要说明
@@ -25,7 +25,8 @@
 - MCP、Skills、SSH、云开发和组件扩展坞；
 - Goal 模式、Agent Mesh、独立验证与 Proof-of-Done；
 - 任务恢复、权限治理、预算治理和证据账本；
-- 默认关闭、预算受限的插件式自进化实验。
+- 默认关闭、预算受限的插件式自进化实验；
+- 空闲时进行零 Token 的本地候选发现，候选进入实验仍需用户确认。
 
 ## 已知问题
 

@@ -1606,6 +1606,113 @@ await CheckAsync("Evolution Lab plugin-only budget and guarded installation", as
     }
 });
 
+await CheckAsync("Evolution Lab scheduled discovery is local throttled and deduplicated", async () =>
+{
+    var temporaryDirectory = Path.Combine(
+        Path.GetTempPath(),
+        "nova-evolution-discovery-" + Guid.NewGuid().ToString("N"));
+    var contextWorkspace = Path.Combine(temporaryDirectory, "context");
+    var labRoot = Path.Combine(temporaryDirectory, "lab");
+    Directory.CreateDirectory(contextWorkspace);
+    try
+    {
+        var lab = new EvolutionLabService(
+            labRoot,
+            new SkillRegistryService(Path.Combine(temporaryDirectory, "skills")));
+        var configured = await lab.ConfigureAsync(
+            enabled: true,
+            scheduledDiscoveryEnabled: true,
+            maxTokensPerExperiment: 8_000,
+            monthlyTokenBudget: 16_000,
+            maxExperimentsPerWeek: 3,
+            maxModelRounds: 2);
+        var discoveryAt = configured.Policy.UpdatedAt.AddMinutes(11);
+        var tasks = new[]
+        {
+            new TaskSnapshot(
+                "failed-task",
+                "Recover a stalled build",
+                "Resume the project from its last safe checkpoint.",
+                contextWorkspace,
+                "deepseek",
+                "deepseek-v4-flash",
+                TaskState.Failed,
+                52,
+                "Build failed",
+                discoveryAt.AddDays(-2),
+                discoveryAt.AddMinutes(-3)),
+            new TaskSnapshot(
+                "completed-task",
+                "Continue the same project",
+                "Keep the verified context and finish the remaining work.",
+                contextWorkspace,
+                "deepseek",
+                "deepseek-v4-flash",
+                TaskState.Completed,
+                100,
+                "Delivered",
+                discoveryAt.AddDays(-1),
+                discoveryAt.AddMinutes(-2))
+        };
+
+        var discovered = await lab.TryDiscoverCandidateAsync(tasks, discoveryAt);
+        Expect(
+            discovered.Scanned
+            && discovered.Candidate is
+            {
+                State: EvolutionExperimentState.Proposed,
+                IsolatedWorkspace: null
+            }
+            && discovered.Candidate.Evidence.Contains("定时本地发现", StringComparison.Ordinal)
+            && discovered.Snapshot.UsedTokensThisMonth == 0
+            && discovered.Snapshot.LastDiscoveryCandidateId == discovered.Candidate.Id
+            && discovered.Snapshot.NextDiscoveryAt == discoveryAt.AddHours(6),
+            "Scheduled discovery did not create a zero-Token local-only candidate.");
+        Expect(
+            !Directory.Exists(Path.Combine(labRoot, "plugin-workspaces")),
+            "Scheduled discovery touched a plugin sandbox before user review.");
+
+        var throttled = await lab.TryDiscoverCandidateAsync(
+            tasks,
+            discoveryAt.AddHours(1));
+        Expect(
+            !throttled.Scanned && throttled.Candidate is null,
+            "Scheduled discovery ignored its six-hour throttle.");
+
+        var pendingReview = await lab.TryDiscoverCandidateAsync(
+            tasks,
+            discoveryAt.AddHours(6).AddMinutes(1));
+        Expect(
+            pendingReview.Scanned
+            && pendingReview.Candidate is null
+            && pendingReview.Snapshot.Experiments.Count == 1
+            && pendingReview.Snapshot.DiscoveryStatus.Contains(
+                "等待现有候选",
+                StringComparison.Ordinal),
+            "Scheduled discovery stacked experiments while review was pending.");
+
+        await lab.RejectAsync(discovered.Candidate!.Id);
+        var duplicate = await lab.TryDiscoverCandidateAsync(
+            tasks,
+            discoveryAt.AddHours(12).AddMinutes(2));
+        Expect(
+            duplicate.Scanned
+            && duplicate.Candidate is null
+            && duplicate.Snapshot.Experiments.Count == 1
+            && duplicate.Snapshot.DiscoveryStatus.Contains(
+                "自动去重",
+                StringComparison.Ordinal),
+            "Scheduled discovery recreated an unchanged rejected signal.");
+    }
+    finally
+    {
+        if (Directory.Exists(temporaryDirectory))
+        {
+            Directory.Delete(temporaryDirectory, recursive: true);
+        }
+    }
+});
+
 await CheckAsync("Skill executable blocking", async () =>
 {
     var temporaryDirectory = Path.Combine(Path.GetTempPath(), "nova-skill-block-" + Guid.NewGuid().ToString("N"));
