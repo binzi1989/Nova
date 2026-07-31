@@ -1,0 +1,105 @@
+name: Release macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub release tag
+        required: true
+        default: v0.9.0-preview.29
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build macOS ${{ matrix.arch }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - arm64
+          - x64
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: NovaDesktop.Electron/package-lock.json
+
+      - name: Install Electron dependencies
+        working-directory: NovaDesktop.Electron
+        run: npm ci
+
+      - name: Build renderer
+        working-directory: NovaDesktop.Electron
+        run: npm run build:renderer
+
+      - name: Publish AgentOS bridge
+        shell: bash
+        run: |
+          rm -rf NovaDesktop.Electron/resources/bridge
+          dotnet publish Nova.AgentOS.Bridge/Nova.AgentOS.Bridge.csproj \
+            --configuration Release \
+            --runtime "osx-${{ matrix.arch }}" \
+            --self-contained true \
+            -p:PublishSingleFile=false \
+            --output NovaDesktop.Electron/resources/bridge
+          test -x NovaDesktop.Electron/resources/bridge/Nova.AgentOS.Bridge
+
+      - name: Package Electron application
+        working-directory: NovaDesktop.Electron
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: >-
+          npx electron-builder
+          --mac zip
+          --${{ matrix.arch }}
+          --config.directories.output=dist-electron-mac
+
+      - name: Verify application payload
+        working-directory: NovaDesktop.Electron
+        shell: bash
+        run: |
+          package="$(find dist-electron-mac -maxdepth 1 -name '*.zip' -print -quit)"
+          test -n "$package"
+          unzip -Z1 "$package" | grep -q 'NOVA AgentOS.app/Contents/MacOS/NOVA AgentOS'
+          unzip -Z1 "$package" | grep -q 'NOVA AgentOS.app/Contents/Resources/bridge/Nova.AgentOS.Bridge'
+          shasum -a 256 "$package"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NOVA-AgentOS-mac-${{ matrix.arch }}
+          path: NovaDesktop.Electron/dist-electron-mac/*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish macOS assets
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download macOS packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: NOVA-AgentOS-mac-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Upload packages to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "${{ inputs.tag }}" release-assets/*.zip --clobber

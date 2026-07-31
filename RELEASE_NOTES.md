@@ -5,16 +5,16 @@
 ## 下载选择
 
 - `NOVA-AgentOS-Electron-0.9.0-preview.29-...-win-x64.zip`：Windows x64 Electron 主体验；
-- `NOVA-Mac-0.1.0-preview.4-osx-arm64.zip`：Apple Silicon Mac Preview；
-- `NOVA-Mac-0.1.0-preview.4-osx-x64.zip`：Intel Mac Preview；
+- `NOVA-AgentOS-Electron-0.9.0-preview.29-mac-arm64.zip`：Apple Silicon Electron 主体验；
+- `NOVA-AgentOS-Electron-0.9.0-preview.29-mac-x64.zip`：Intel Electron 主体验；
 - 项目介绍 PPT 与项目说明书：产品、架构和 1.0 发布边界。
 
 ## 重要说明
 
 - 所有安装包当前均未签名；
 - Windows 自动更新默认关闭；
-- Mac 构建为跨平台打包的 Preview，未完成 Developer ID 签名与 Apple 公证；
-- Mac 版本尚未与 Windows 功能完全对等；
+- Mac 构建由 macOS 原生 CI 生成，与 Windows 共用 Electron UI 和 AgentOS Bridge/Core；
+- Mac 包尚未完成 Developer ID 签名与 Apple 公证，Windows 专属桌面控制能力不可用；
 - 请只从本仓库 Release 页面下载，并核对发布页面上的 SHA-256。
 
 ## 主要能力

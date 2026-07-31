@@ -7,6 +7,7 @@
 ### Added
 
 - Electron / React 主交互壳与 .NET 8 AgentOS Bridge；
+- Windows 与 macOS 共用 Electron UI、跨平台 AgentOS Bridge/Core，并提供 macOS arm64/x64 原生构建流水线；
 - OpenAI、DeepSeek、Kimi、Ollama 与兼容模型端点；
 - 输入附件、图片理解、Markdown 渲染与多轮 Threadspace；
 - Ask、Plan、Build、Autopilot、Goal 模式；
@@ -25,6 +26,6 @@
 ### Known limitations
 
 - Preview 未签名，自动更新关闭；
-- Mac Preview 未完成签名、公证和 Windows 功能对等；
+- Mac Preview 未完成 Developer ID 签名、公证和 macOS 原生桌面控制；
 - 复杂编码质量仍依赖底层模型、上下文编译和工具链成熟度；
 - 1.0 GA 所需的 30×3 真实端到端基准尚未完成。

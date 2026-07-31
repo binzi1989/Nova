@@ -13,6 +13,7 @@
     "build": "npm run build:renderer && npm run build:bridge",
     "package:win": "npm run build && electron-builder --win dir",
     "package:win:zip": "npm run build && electron-builder --win zip",
+    "package:mac": "node scripts/build-mac.mjs",
     "smoke": "electron . --smoke",
     "smoke:bridge": "node scripts/smoke-bridge.mjs"
   },
@@ -67,6 +68,19 @@
         }
       ],
       "artifactName": "NOVA-AgentOS-Electron-${version}-${arch}.${ext}"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "NOVA-AgentOS-Electron-${version}-mac-${arch}.${ext}"
     }
   }
 }

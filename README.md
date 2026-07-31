@@ -57,13 +57,13 @@ flowchart LR
     Fabric --> Truth
 ```
 
-当前 Electron 是主要交互验证壳，复用 `.NET 8` AgentOS Bridge/Core。仓库仍保留成熟的 WPF Windows 实现和独立 Avalonia Mac Preview；1.0 前需要冻结正式桌面主线和迁移边界，避免长期形成两套状态真值。
+当前 Electron 是 Windows 与 macOS 共用的主要交互壳，复用同一套跨平台 `.NET 8` AgentOS Bridge/Core。仓库仍保留成熟的 WPF Windows 实现和早期 Avalonia Mac Preview，作为迁移与回归参考。
 
 ## 快速开始
 
 ### 环境
 
-- Windows 10/11 x64
+- Windows 10/11 x64，或 macOS 13+
 - .NET 8 SDK
 - Node.js 20+
 - PowerShell 7 或 Windows PowerShell 5.1
@@ -74,6 +74,14 @@ flowchart LR
 cd NovaDesktop.Electron
 npm ci
 npm run build
+```
+
+在 macOS 上构建 Apple Silicon 与 Intel 发布包：
+
+```bash
+cd NovaDesktop.Electron
+npm ci
+npm run package:mac
 ```
 
 ### 启动开发环境
@@ -123,7 +131,7 @@ Ollama 与自定义兼容端点可配置 Base URL。本地和局域网地址允�
 |---|---|---|
 | Windows Electron x64 | 主体验 Preview | 连接 .NET 8 AgentOS Bridge/Core |
 | Windows WPF x64 | 成熟参考实现 | 功能较完整，保留用于服务与迁移验证 |
-| macOS arm64 / x64 | 独立 Preview | 未签名、未公证，尚未与 Windows 功能完全对等 |
+| macOS Electron arm64 / x64 | 同步体验 Preview | 与 Windows 共用 Electron UI 和 AgentOS Bridge/Core；未签名、未公证，Windows 专属桌面控制能力除外 |
 
 ## 项目结构
 
@@ -134,7 +142,7 @@ Ollama 与自定义兼容端点可配置 Base URL。本地和局域网地址允�
 | `NovaDesktop` | WPF 壳与主要服务实现 |
 | `Nova.AgentOS` | Kernel、Supervisor、任务图和治理模型 |
 | `Nova.Core` | 跨平台基础模型与 Provider 协议 |
-| `NovaDesktop.Mac` | Avalonia Mac Preview |
+| `NovaDesktop.Mac` | 早期 Avalonia Mac Preview，保留用于迁移参考 |
 | `NovaDesktop.SmokeTests` | AgentOS 自动烟雾测试 |
 | `ga` / `tools` | GA 基准、验证和发布工具 |
 

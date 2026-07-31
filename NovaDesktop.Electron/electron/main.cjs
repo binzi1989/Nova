@@ -36,8 +36,12 @@ class BridgeClient {
   start() {
     if (this.process) return;
 
+    const bridgeExecutable =
+      process.platform === "win32"
+        ? "Nova.AgentOS.Bridge.exe"
+        : "Nova.AgentOS.Bridge";
     const executable = app.isPackaged
-      ? path.join(process.resourcesPath, "bridge", "Nova.AgentOS.Bridge.exe")
+      ? path.join(process.resourcesPath, "bridge", bridgeExecutable)
       : "dotnet";
     const args = app.isPackaged
       ? []
@@ -62,7 +66,7 @@ class BridgeClient {
     }
 
     this.process = spawn(executable, args, {
-      windowsHide: true,
+      windowsHide: process.platform === "win32",
       stdio: ["pipe", "pipe", "pipe"]
     });
 

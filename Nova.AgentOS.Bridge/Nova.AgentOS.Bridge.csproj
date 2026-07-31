@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>Nova.AgentOS.Bridge</AssemblyName>
@@ -9,6 +9,6 @@
     <Version>0.9.0-preview.29</Version>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\NovaDesktop\NovaDesktop.csproj" />
+    <ProjectReference Include="..\Nova.AgentOS\Nova.AgentOS.csproj" />
   </ItemGroup>
 </Project>
