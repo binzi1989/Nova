@@ -228,6 +228,7 @@ function App() {
   const [modelEndpoint, setModelEndpoint] = useState("");
   const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
   const [executionMode, setExecutionMode] = useState<ExecutionMode>("Build");
+  const [crossModelReview, setCrossModelReview] = useState(false);
   const [connected, setConnected] = useState<Partial<Record<Provider, boolean>>>({});
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -309,6 +310,13 @@ function App() {
     if (!workspace) return "尚未选择工作区";
     return workspace.split(/[\\/]/).filter(Boolean).at(-1) || workspace;
   }, [workspace]);
+  const reviewCandidates = useMemo(
+    () =>
+      (Object.keys(providerLabels) as Provider[]).filter(
+        (candidate) => candidate !== provider && connected[candidate]
+      ),
+    [connected, provider]
+  );
 
   async function refreshTasks() {
     const result = await window.nova.system.listTasks();
@@ -783,6 +791,7 @@ function App() {
         runId,
         approvalMode,
         executionMode,
+        crossModelReview,
         messages: nextMessages.map(({ role, content: body }) => ({
           role,
           content: body
@@ -796,14 +805,22 @@ function App() {
           id: crypto.randomUUID(),
           role: "assistant",
           content: result.output,
-          createdAt: now()
+          createdAt: now(),
+          verification: result.verification,
+          delivery: result.delivery
         }
       ]);
-      setNotice("本轮结果已写入任务线程，文件变更由 Agent Runtime 实际执行");
+      setNotice(
+        result.delivery?.status === "PARTIAL"
+          ? result.delivery.summary
+          : result.verification?.verdict === "PASS"
+            ? "本轮已经过不同模型源的独立复核，审查结论已随结果保存"
+            : "本轮结果已写入任务线程，文件变更由 Agent Runtime 实际执行"
+      );
       addActivity(
-        "本轮已完成",
+        result.delivery?.status === "PARTIAL" ? "本轮待继续" : "本轮已完成",
         `任务 ${result.taskId} · ${result.toolCalls || 0} 次工具调用`,
-        "done"
+        result.delivery?.status === "PARTIAL" ? "failed" : "done"
       );
       await refreshTasks();
     } catch (error) {
@@ -1029,6 +1046,64 @@ function App() {
                         ? <MarkdownContent content={parsed.display} />
                         : parsed.display}
                     </div>
+                    {message.role === "assistant" && message.delivery && (
+                      <section
+                        className={`delivery-passport ${message.delivery.status.toLowerCase()}`}
+                      >
+                        <div className="delivery-passport-heading">
+                          <ShieldCheck size={17} />
+                          <div>
+                            <strong>
+                              {message.delivery.status === "PROVEN"
+                                ? "跨模型已验证"
+                                : message.delivery.status === "EVIDENCED"
+                                  ? "已有本机证据"
+                                  : message.delivery.status === "PARTIAL"
+                                    ? "待继续完成"
+                                    : "结果已生成"}
+                            </strong>
+                            <span>{message.delivery.summary}</span>
+                          </div>
+                          <b>{message.delivery.status}</b>
+                        </div>
+                        <div className="delivery-proof-row">
+                          <span>
+                            文件写入
+                            <b>{message.delivery.hasWorkspaceChanges ? "有" : "无"}</b>
+                          </span>
+                          <span>
+                            验证步骤
+                            <b>{message.delivery.validationRuns}</b>
+                          </span>
+                          {message.verification && (
+                            <span>
+                              独立审查
+                              <b>
+                                {message.verification.verdict} ·{" "}
+                                {message.verification.confidence}%
+                              </b>
+                            </span>
+                          )}
+                        </div>
+                        {message.verification && (
+                          <details className="verification-detail">
+                            <summary>
+                              {message.verification.provider
+                                ? `${providerLabels[
+                                    message.verification.provider as Provider
+                                  ] || message.verification.provider} · ${
+                                    message.verification.model
+                                  }`
+                                : "异构复核未启用"}
+                              <span>{message.verification.summary}</span>
+                            </summary>
+                            {message.verification.details && (
+                              <MarkdownContent content={message.verification.details} />
+                            )}
+                          </details>
+                        )}
+                      </section>
+                    )}
                     {message.role === "assistant" && parsed.choices.length >= 2 && (
                       <div className="choice-grid">
                         {parsed.choices.map((choice) => (
@@ -1137,6 +1212,27 @@ function App() {
                 </select>
                 <ChevronDown size={14} />
               </label>
+              <button
+                type="button"
+                className={`cross-review-control ${crossModelReview ? "active" : ""}`}
+                disabled={running}
+                title="让另一个已连接的模型只读复核结果；最多额外请求 3 轮"
+                onClick={() => {
+                  if (!reviewCandidates.length) {
+                    openSettings("model");
+                    setNotice("双模型复核需要再连接一个不同来源的模型");
+                    return;
+                  }
+                  setCrossModelReview((value) => !value);
+                }}
+              >
+                <ShieldCheck size={16} />
+                <span>
+                  {crossModelReview
+                    ? `双模型复核 · ${providerLabels[reviewCandidates[0]]}`
+                    : "双模型复核"}
+                </span>
+              </button>
             </div>
             <div className="run-actions">
               {running && (
@@ -2160,6 +2256,22 @@ function App() {
               <strong>{pendingSubmission.content}</strong>
               <span>{workspace}</span>
             </div>
+            {crossModelReview && (
+              <div className="cross-review-approval">
+                <ShieldCheck size={18} />
+                <div>
+                  <strong>本轮启用双模型独立复核</strong>
+                  <span>
+                    主执行使用 {providerLabels[provider]}，完成后会额外调用{" "}
+                    {reviewCandidates.length
+                      ? providerLabels[reviewCandidates[0]]
+                      : "另一个模型"}
+                    进行只读审查。它会收到目标、主模型答复和必要的工作区证据，
+                    不具备写入权限；最多额外请求 3 轮，每次输出预算上限 12,000 Token。
+                  </span>
+                </div>
+              </div>
+            )}
             {executionMode !== "Ask" && executionMode !== "Plan" && (
               <button
                 className="approval-option recommended"

@@ -89,6 +89,26 @@ try {
   if (!Array.isArray(recovered.messages) || recovered.messages.length < 2) {
     throw new Error("Recovered task did not preserve the conversation.");
   }
+  console.log("SMOKE_STEP partial_delivery");
+  const partialTask = await call("start_task", {
+    prompt: "创建一个必须落盘并验证的示例",
+    title: "Electron Partial Delivery Smoke",
+    workspaceRoot: path.resolve(scriptDirectory, ".."),
+    provider: "local-smoke",
+    model: "protocol-only",
+    mode: "Build"
+  });
+  const partial = await call("complete_task", {
+    taskId: partialTask.id,
+    succeeded: true,
+    outcome: "partial",
+    detail: "PARTIAL · 没有真实文件写入，禁止冒充完成",
+    draft: "仅返回了说明，没有交付文件。"
+  });
+  if (String(partial.state).toLowerCase() !== "paused") {
+    throw new Error(`Partial delivery escaped the completion gate: ${partial.state}`);
+  }
+  await call("archive_task", { taskId: partial.id });
   console.log("SMOKE_STEP list_capabilities");
   const capabilities = await call("list_capabilities", {
     workspaceRoot: path.resolve(scriptDirectory, "..")

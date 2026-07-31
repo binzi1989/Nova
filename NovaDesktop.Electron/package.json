@@ -1,6 +1,6 @@
 {
   "name": "nova-agentos-electron",
-  "version": "0.9.0-preview.29",
+  "version": "1.0.0",
   "private": true,
   "author": "NOVA AgentOS Project",
   "description": "NOVA AgentOS next-generation desktop shell",

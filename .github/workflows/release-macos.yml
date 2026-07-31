@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing GitHub release tag
         required: true
-        default: v0.9.0-preview.29
+        default: v1.0.0
 
 permissions:
   contents: write

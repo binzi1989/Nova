@@ -2485,7 +2485,7 @@ await CheckAsync("single runtime version source for 1.0 release alignment", asyn
             "<InformationalVersion>$(Version)</InformationalVersion>",
             StringComparison.Ordinal)
         && installer.Contains(
-            "#define MyAppVersion \"0.9.0-preview.29\"",
+            "#define MyAppVersion \"1.0.0\"",
             StringComparison.Ordinal),
         "Package and installer version definitions are still drifting.");
 });
@@ -4579,7 +4579,7 @@ await CheckAsync("AgentOS kernel persistence and event ledger", async () =>
 
         var restoredKernel = new AgentOsKernel(temporaryDirectory);
         var restored = await restoredKernel.BootAsync();
-        Expect(firstBoot.KernelVersion == "0.9.0-preview.29", "Kernel exposed an incorrect version.");
+        Expect(firstBoot.KernelVersion == "1.0.0", "Kernel exposed an incorrect version.");
         Expect(
             restored.ExecutionMode == AgentExecutionMode.Autopilot,
             "Kernel did not restore the execution policy.");
@@ -5307,6 +5307,43 @@ await CheckAsync("Electron top-level workspace approval contract", async () =>
         && electronStyles.Contains(".markdown-body table", StringComparison.Ordinal)
         && electronStyles.Contains(".markdown-body pre", StringComparison.Ordinal),
         "Assistant Markdown is not rendered as a structured, readable document.");
+});
+
+await CheckAsync("Electron 1.0 trustworthy cross-model delivery contract", async () =>
+{
+    var bridgeSource = await File.ReadAllTextAsync(
+        @"D:\Agent\Nova.AgentOS.Bridge\Program.cs");
+    var mainSource = await File.ReadAllTextAsync(
+        @"D:\Agent\NovaDesktop.Electron\electron\main.cjs");
+    var rendererSource = await File.ReadAllTextAsync(
+        @"D:\Agent\NovaDesktop.Electron\src\App.tsx");
+    Expect(
+        bridgeSource.Contains("\"verify_result\"", StringComparison.Ordinal)
+        && bridgeSource.Contains(
+            "NOVA HETEROGENEOUS RESULT REVIEW",
+            StringComparison.Ordinal)
+        && bridgeSource.Contains(
+            "AllowParallelDelegation: false",
+            StringComparison.Ordinal),
+        "The Electron bridge no longer exposes a bounded read-only independent reviewer.");
+    Expect(
+        bridgeSource.Contains(
+            "BuildConversationContext",
+            StringComparison.Ordinal)
+        && mainSource.Contains("conversation: messages", StringComparison.Ordinal),
+        "Multi-turn UI history is still silently discarded before the runtime.");
+    Expect(
+        bridgeSource.Contains(
+            "\"auto_delegate_parallel_tasks\"",
+            StringComparison.Ordinal),
+        "Electron Autopilot still rejects the runtime's automatic Agent delegation approval name.");
+    Expect(
+        mainSource.Contains("chooseIndependentReviewer", StringComparison.Ordinal)
+        && mainSource.Contains("requiresWorkspaceMutation", StringComparison.Ordinal)
+        && mainSource.Contains("deliveryStatus = \"PARTIAL\"", StringComparison.Ordinal)
+        && rendererSource.Contains("双模型复核", StringComparison.Ordinal)
+        && rendererSource.Contains("delivery-passport", StringComparison.Ordinal),
+        "The 1.0 renderer can no longer opt into cross-model review or expose truthful partial delivery.");
 });
 
 if (File.Exists(runtimeEvidencePath))

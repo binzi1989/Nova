@@ -2,7 +2,7 @@
   #define MyAppName "NOVA Desktop"
 #endif
 #ifndef MyAppVersion
-  #define MyAppVersion "0.9.0-preview.29"
+  #define MyAppVersion "1.0.0"
 #endif
 #ifndef MyAppPublisher
   #define MyAppPublisher "NOVA"
@@ -11,7 +11,7 @@
   #define MyAppExeName "NovaDesktop.exe"
 #endif
 #ifndef PublishDir
-  #define PublishDir "..\dist\NOVA-0.9.0-preview.29-win-x64"
+  #define PublishDir "..\dist\NOVA-1.0.0-win-x64"
 #endif
 #ifndef SetupOutputName
   #define SetupOutputName "NOVA-Setup-" + MyAppVersion + "-win-x64"

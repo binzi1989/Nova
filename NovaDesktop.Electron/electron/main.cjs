@@ -116,7 +116,10 @@ class BridgeClient {
     this.start();
     const id = `electron-${Date.now()}-${++this.sequence}`;
     return new Promise((resolve, reject) => {
-      const timeoutMs = method === "run_agent" ? 30 * 60 * 1000 : 20000;
+      const timeoutMs =
+        method === "run_agent" || method === "verify_result"
+          ? 30 * 60 * 1000
+          : 20000;
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`AgentOS ${method} 响应超时。`));
@@ -569,6 +572,34 @@ async function callChatCompletions({
   return output;
 }
 
+function modelSourceId(provider, endpoint) {
+  if (provider === "openai") return "openai";
+  if (provider === "deepseek") return "deepseek";
+  if (provider === "kimi") return "moonshot";
+  try {
+    const authority = new URL(endpoint).host.toLowerCase();
+    return provider === "ollama" ? `local:${authority}` : `host:${authority}`;
+  } catch {
+    return `${provider}:unknown`;
+  }
+}
+
+function chooseIndependentReviewer(primaryProvider, primaryConnection) {
+  const primarySource = modelSourceId(
+    primaryProvider,
+    primaryConnection?.endpoint || ""
+  );
+  const preference = ["openai", "deepseek", "kimi", "ollama", "custom"];
+  return preference
+    .filter((candidate) => candidate !== primaryProvider)
+    .map((candidate) => [candidate, modelConnections.get(candidate)])
+    .find(
+      ([candidate, connection]) =>
+        connection &&
+        modelSourceId(candidate, connection.endpoint || "") !== primarySource
+    );
+}
+
 async function runModel(request) {
   const provider = String(request?.provider || "deepseek");
   validateProvider(provider);
@@ -603,6 +634,7 @@ async function runModel(request) {
       apiKey,
       endpoint: connection.endpoint,
       approvalMode: request?.approvalMode || "readOnly",
+      conversation: messages,
       attachments: attachments.map((item) => ({
         id: item.id,
         path: item.path,
@@ -611,18 +643,117 @@ async function runModel(request) {
       }))
     });
     const output = String(result.output || "");
+    const requiresWorkspaceMutation = Boolean(result.requiresWorkspaceMutation);
+    const hasWorkspaceChanges = Number(result.mutatingToolCalls || 0) > 0;
+    const hasValidationRun = Number(result.validationRuns || 0) > 0;
+    let deliveryStatus =
+      requiresWorkspaceMutation && (!hasWorkspaceChanges || !hasValidationRun)
+        ? "PARTIAL"
+        : requiresWorkspaceMutation
+          ? "EVIDENCED"
+          : "READY";
+    let deliverySummary =
+      deliveryStatus === "PARTIAL"
+        ? !hasWorkspaceChanges
+          ? "任务需要修改工程，但本轮没有产生真实文件写入。结果已保留，未标记为完成。"
+          : "文件已经修改，但缺少可识别的构建或测试证据。结果已保留，等待继续验证。"
+        : deliveryStatus === "EVIDENCED"
+          ? "已检测到真实文件写入和本机验证步骤。"
+          : "本轮不要求工作区变更，结果已生成。";
+    let verification = null;
+
+    if (request?.crossModelReview === true) {
+      const reviewer = chooseIndependentReviewer(provider, connection);
+      if (!reviewer) {
+        verification = {
+          provider: "",
+          model: "",
+          verdict: "SKIPPED",
+          confidence: 0,
+          summary: "没有找到来自不同模型源的第二个已连接模型，本轮未进行异构复核。",
+          details: ""
+        };
+        if (requiresWorkspaceMutation) {
+          deliveryStatus = "PARTIAL";
+          deliverySummary =
+            "本轮要求双模型复核，但没有可用的独立模型源；工程任务已保留为待继续状态。";
+        }
+      } else {
+        const [reviewProvider, reviewConnection] = reviewer;
+        try {
+          verification = await bridge.call("verify_result", {
+            taskId,
+            originalGoal: prompt,
+            primaryOutput: output,
+            provider: reviewProvider,
+            model: reviewConnection.model,
+            apiKey: reviewConnection.apiKey || "",
+            endpoint: reviewConnection.endpoint
+          });
+          if (verification?.verdict === "PASS" && deliveryStatus !== "PARTIAL") {
+            deliveryStatus = "PROVEN";
+            deliverySummary =
+              "主模型结果已通过不同模型源的独立只读复核，并保留可查看的审查结论。";
+          } else if (
+            ["CONCERNS", "FAIL", "UNAVAILABLE"].includes(
+              String(verification?.verdict || "")
+            )
+          ) {
+            deliveryStatus = "PARTIAL";
+            deliverySummary =
+              "独立复核未能确认结果可靠，本轮保留为待继续状态，不冒充已经完成。";
+          }
+        } catch (reviewError) {
+          verification = {
+            provider: reviewProvider,
+            model: reviewConnection.model,
+            verdict: "UNAVAILABLE",
+            confidence: 0,
+            summary: `独立复核暂时不可用：${safeError(reviewError)}`,
+            details: ""
+          };
+          if (requiresWorkspaceMutation) {
+            deliveryStatus = "PARTIAL";
+            deliverySummary =
+              "主执行结果已保留，但异构复核未完成；工程任务不会因此冒充已验证。";
+          }
+        }
+      }
+    }
+    const partial = deliveryStatus === "PARTIAL";
+    const verificationLine = verification
+      ? `\n- 独立审查：${verification.provider || "未启用"}${
+          verification.model ? ` · ${verification.model}` : ""
+        } · ${verification.verdict} · 置信度 ${verification.confidence || 0}%`
+      : "";
+    const persistedDraft =
+      `${output}\n\n---\n### NOVA 交付护照\n` +
+      `- 状态：${deliveryStatus}\n` +
+      `- 结论：${deliverySummary}\n` +
+      `- 文件写入：${hasWorkspaceChanges ? "有" : "无"}\n` +
+      `- 本机验证步骤：${Number(result.validationRuns || 0)}` +
+      verificationLine;
     await bridge.call("complete_task", {
       taskId,
       succeeded: true,
-      outputCharacters: output.length,
-      detail: `Agent Runtime 已完成 · ${result.toolCalls || 0} 次工具调用 · ${result.mutatingToolCalls || 0} 次写操作`,
-      draft: output
+      outcome: partial ? "partial" : "completed",
+      outputCharacters: persistedDraft.length,
+      detail: `${deliveryStatus} · ${deliverySummary} · ${result.toolCalls || 0} 次工具调用 · ${result.mutatingToolCalls || 0} 次写操作`,
+      draft: persistedDraft
     });
     return {
       taskId,
       output,
       toolCalls: result.toolCalls || 0,
-      mutatingToolCalls: result.mutatingToolCalls || 0
+      mutatingToolCalls: result.mutatingToolCalls || 0,
+      verification,
+      delivery: {
+        status: deliveryStatus,
+        summary: deliverySummary,
+        requiresWorkspaceMutation,
+        hasWorkspaceChanges,
+        validationRuns: Number(result.validationRuns || 0)
+      }
     };
   } catch (error) {
     if (cancelledRuns.delete(runId)) {

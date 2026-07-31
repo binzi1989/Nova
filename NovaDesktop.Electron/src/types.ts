@@ -15,6 +15,26 @@ export interface Message {
   content: string;
   createdAt: string;
   attachments?: Attachment[];
+  verification?: CrossModelVerification | null;
+  delivery?: DeliveryProof | null;
+}
+
+export interface CrossModelVerification {
+  provider: string;
+  model: string;
+  verdict: "PASS" | "CONCERNS" | "FAIL" | "SKIPPED" | "UNAVAILABLE";
+  confidence: number;
+  summary: string;
+  details?: string;
+  completedAt?: string;
+}
+
+export interface DeliveryProof {
+  status: "PROVEN" | "EVIDENCED" | "READY" | "PARTIAL";
+  summary: string;
+  requiresWorkspaceMutation: boolean;
+  hasWorkspaceChanges: boolean;
+  validationRuns: number;
 }
 
 export interface AgentTask {
@@ -249,11 +269,14 @@ export interface NovaApi {
       runId: string;
       approvalMode: "workspace" | "workspaceDesktop" | "readOnly";
       executionMode: ExecutionMode;
+      crossModelReview?: boolean;
     }): Promise<{
       taskId: string;
       output: string;
       toolCalls: number;
       mutatingToolCalls: number;
+      verification?: CrossModelVerification | null;
+      delivery?: DeliveryProof | null;
     }>;
     cancel(request: { runId: string }): Promise<{ cancelled: boolean }>;
     onEvent(listener: (event: AgentEvent) => void): () => void;

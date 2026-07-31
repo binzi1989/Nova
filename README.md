@@ -4,8 +4,8 @@
 
 NOVA 是一个本地优先、证据优先、由用户控制的桌面 AgentOS。它不只生成回答，而是把目标转换为可执行任务，在明确的工作区、权限和预算边界内调用模型与工具，并用真实文件、测试结果和可追溯证据判断任务是否完成。
 
-> 当前版本：`0.9.0-preview.29`  
-> 当前状态：Preview，尚未达到 1.0 GA。安装包未签名，自动更新默认关闭。
+> 当前版本：`1.0.0`
+> 当前状态：首个 1.0 桌面基线。安装包未签名，自动更新默认关闭。
 
 ## 为什么需要 NOVA
 
@@ -35,10 +35,12 @@ NOVA 把这些问题统一到一条执行链：
 - 全屏多轮 Threadspace，支持 Markdown、代码块、表格、附件与交互选项；
 - Ask、Plan、Build、Autopilot、Goal 五种任务模式；
 - OpenAI、DeepSeek、Kimi、Ollama 与 OpenAI-compatible 自定义端点；
+- 可选双模型复核：主模型执行，另一不同来源模型以全新只读上下文独立审查；
 - 受控文件读写、搜索、Patch、构建、测试和有限命令执行；
 - MCP stdio / Streamable HTTP、Skills、SSH 与云开发扩展入口；
 - Agent Mesh、并行研究、Worktree Tournament 与独立 Council 审查；
 - Mission Charter、Proof-of-Done、证据账本和状态真值；
+- Electron 可信交付门：需要改工程却没有真实写入或验证时标记 PARTIAL，不冒充完成；
 - 持久任务、归档、暂停、取消、安全恢复与副作用幂等；
 - 插件式自进化实验：默认关闭、预算受限、不暴露或修改核心源码。
 

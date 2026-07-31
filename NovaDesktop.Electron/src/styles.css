@@ -3286,6 +3286,173 @@ select:focus-visible {
   font-size: 9px;
 }
 
+.cross-review-control {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid #3a3f36 !important;
+  border-radius: 7px;
+  background: #191b17 !important;
+  color: #92998d !important;
+  white-space: nowrap;
+}
+
+.cross-review-control:hover {
+  border-color: #596451 !important;
+  color: #d9ded3 !important;
+}
+
+.cross-review-control.active {
+  border-color: #748e69 !important;
+  background: #20271d !important;
+  color: #bad1ae !important;
+  box-shadow: inset 0 0 0 1px rgba(147, 180, 133, 0.12);
+}
+
+.cross-review-control:disabled {
+  opacity: 0.55;
+}
+
+.cross-review-approval {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid #495440;
+  border-radius: 8px;
+  background: #1e241b;
+  color: #a9c09f;
+}
+
+.cross-review-approval > div {
+  display: grid;
+  gap: 4px;
+}
+
+.cross-review-approval strong {
+  color: #dce8d6;
+  font-size: 10px;
+}
+
+.cross-review-approval span {
+  color: #8f9b89;
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.delivery-passport {
+  display: grid;
+  gap: 9px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #3d4638;
+  border-radius: 8px;
+  background: #181b16;
+}
+
+.delivery-passport.proven {
+  border-color: #55714f;
+  background: #192018;
+}
+
+.delivery-passport.partial {
+  border-color: #725e3f;
+  background: #211d16;
+}
+
+.delivery-passport-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 9px;
+  color: #98b68e;
+}
+
+.delivery-passport-heading > div {
+  display: grid;
+  gap: 3px;
+}
+
+.delivery-passport-heading strong {
+  color: #e0e6dc;
+  font-size: 11px;
+}
+
+.delivery-passport-heading span {
+  color: #8d9488;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.delivery-passport-heading > b {
+  padding: 3px 6px;
+  border: 1px solid #4b5744;
+  border-radius: 4px;
+  color: #a6b99e;
+  font-size: 8px;
+  letter-spacing: 0.06em;
+}
+
+.delivery-passport.partial .delivery-passport-heading,
+.delivery-passport.partial .delivery-passport-heading > b {
+  color: #d1a86e;
+  border-color: #725e3f;
+}
+
+.delivery-proof-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.delivery-proof-row > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  border: 1px solid #343a31;
+  border-radius: 5px;
+  color: #7f877a;
+  font-size: 8px;
+}
+
+.delivery-proof-row b {
+  color: #c6cec0;
+}
+
+.verification-detail {
+  border-top: 1px solid #30362d;
+  padding-top: 8px;
+}
+
+.verification-detail summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #aeb8a8;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.verification-detail summary span {
+  min-width: 0;
+  overflow: hidden;
+  color: #7e8579;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.verification-detail .markdown-body {
+  margin-top: 9px;
+  padding: 9px;
+  border: 1px solid #30362d;
+  border-radius: 6px;
+  background: #141612;
+  font-size: 9px;
+}
+
 @media (max-width: 1260px) {
   .provider-tabs {
     grid-template-columns: repeat(3, minmax(0, 1fr));
