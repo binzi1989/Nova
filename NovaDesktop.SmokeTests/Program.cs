@@ -2275,6 +2275,61 @@ await CheckAsync("persistent multi-turn conversation context", async () =>
         Expect(
             resumedContext.Contains("这是恢复任务后的全新指令", StringComparison.Ordinal),
             "A resumed task dropped the current user instruction from model context.");
+
+        await service.AppendAsync(
+            "conversation-smoke",
+            "assistant",
+            new string('推', 18_000)
+            + "\n---\n### NOVA 交付护照\n- 状态：READY");
+        await service.AppendAsync(
+            "conversation-smoke",
+            "user",
+            "纠正：不要修改任何文件，改成只做咨询分析；预算不超过三轮。");
+        var consultationContext = service.BuildContextPrompt(
+            "conversation-smoke",
+            "继续，按刚才确认的方向给我三个方案。");
+        Expect(
+            consultationContext.Contains("[NOVA THREAD MEMORY v2]", StringComparison.Ordinal)
+            && consultationContext.Contains(
+                "即使本任务没有产生任何本地文件",
+                StringComparison.Ordinal)
+            && consultationContext.Contains(
+                "不要修改任何文件，改成只做咨询分析",
+                StringComparison.Ordinal)
+            && consultationContext.Contains(
+                "继续，按刚才确认的方向给我三个方案",
+                StringComparison.Ordinal),
+            "Non-file consultation memory lost the user's correction or referential follow-up.");
+        Expect(
+            !consultationContext.Contains("NOVA 交付护照", StringComparison.Ordinal)
+            && consultationContext.Length <= 36_000,
+            "Thread memory retained delivery boilerplate or exceeded its context budget.");
+
+        var transientOnly = new[]
+        {
+            new ConversationTurn(
+                "transient-user",
+                "legacy-task",
+                "user",
+                "我们讨论的是线下零售方案。",
+                DateTimeOffset.UnixEpoch),
+            new ConversationTurn(
+                "transient-assistant",
+                "legacy-task",
+                "assistant",
+                "已经比较了三个选址方向。",
+                DateTimeOffset.UnixEpoch.AddSeconds(1))
+        };
+        var transientContext = service.BuildContextPrompt(
+            "legacy-task",
+            "继续第二个方向。",
+            transientOnly,
+            includeCurrentPrompt: false);
+        Expect(
+            transientContext.Contains("线下零售方案", StringComparison.Ordinal)
+            && transientContext.Contains("已经比较了三个选址方向", StringComparison.Ordinal)
+            && !transientContext.Contains("继续第二个方向", StringComparison.Ordinal),
+            "Legacy transient conversation fallback did not compile a bounded prior-turn memory.");
     }
     finally
     {
@@ -5313,6 +5368,8 @@ await CheckAsync("Electron 1.0 trustworthy cross-model delivery contract", async
 {
     var bridgeSource = await File.ReadAllTextAsync(
         @"D:\Agent\Nova.AgentOS.Bridge\Program.cs");
+    var conversationSource = await File.ReadAllTextAsync(
+        @"D:\Agent\NovaDesktop\Services\ConversationHistoryService.cs");
     var mainSource = await File.ReadAllTextAsync(
         @"D:\Agent\NovaDesktop.Electron\electron\main.cjs");
     var rendererSource = await File.ReadAllTextAsync(
@@ -5330,6 +5387,12 @@ await CheckAsync("Electron 1.0 trustworthy cross-model delivery contract", async
         bridgeSource.Contains(
             "BuildConversationContext",
             StringComparison.Ordinal)
+        && conversationSource.Contains(
+            "[NOVA THREAD MEMORY v2]",
+            StringComparison.Ordinal)
+        && bridgeSource.Contains(
+            "includeCurrentPrompt: false",
+            StringComparison.Ordinal)
         && mainSource.Contains("conversation: messages", StringComparison.Ordinal),
         "Multi-turn UI history is still silently discarded before the runtime.");
     Expect(
@@ -5344,6 +5407,38 @@ await CheckAsync("Electron 1.0 trustworthy cross-model delivery contract", async
         && rendererSource.Contains("双模型复核", StringComparison.Ordinal)
         && rendererSource.Contains("delivery-passport", StringComparison.Ordinal),
         "The 1.0 renderer can no longer opt into cross-model review or expose truthful partial delivery.");
+});
+
+await CheckAsync("Electron bridge non-blocking start and lease retry contract", async () =>
+{
+    var bridgeSource = await File.ReadAllTextAsync(
+        @"D:\Agent\Nova.AgentOS.Bridge\Program.cs");
+    var mainSource = await File.ReadAllTextAsync(
+        @"D:\Agent\NovaDesktop.Electron\electron\main.cjs");
+    Expect(
+        bridgeSource.Contains(
+            "inFlightRequests.Add(ProcessRequestAsync(line))",
+            StringComparison.Ordinal)
+        && bridgeSource.Contains(
+            "await Task.WhenAll(inFlightRequests)",
+            StringComparison.Ordinal),
+        "Long model calls can still serialize and block every AgentOS control request.");
+    Expect(
+        bridgeSource.Contains(
+            "_active.TryGetValue(requestedTaskId, out var activeTask)",
+            StringComparison.Ordinal)
+        && bridgeSource.Contains(
+            "return ProjectTask(activeTask)",
+            StringComparison.Ordinal),
+        "A completed start_task response cannot be recovered idempotently after a shell timeout.");
+    Expect(
+        mainSource.Contains(
+            "method === \"start_task\"",
+            StringComparison.Ordinal)
+        && mainSource.Contains(
+            "2 * 60 * 1000",
+            StringComparison.Ordinal),
+        "Electron still applies the legacy twenty-second timeout to AgentOS task startup.");
 });
 
 if (File.Exists(runtimeEvidencePath))

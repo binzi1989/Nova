@@ -1,4 +1,5 @@
 using System.Text;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -32,13 +33,10 @@ async Task WriteProtocolAsync(object message)
 using var host = new AgentOsBridgeHost(
     (eventName, payload) => WriteProtocolAsync(new BridgeNotification(eventName, payload)));
 
-while (await Console.In.ReadLineAsync() is { } line)
-{
-    if (string.IsNullOrWhiteSpace(line))
-    {
-        continue;
-    }
+var inFlightRequests = new List<Task>();
 
+async Task ProcessRequestAsync(string line)
+{
     BridgeResponse response;
     try
     {
@@ -69,6 +67,24 @@ while (await Console.In.ReadLineAsync() is { } line)
     await WriteProtocolAsync(response);
 }
 
+while (await Console.In.ReadLineAsync() is { } line)
+{
+    if (string.IsNullOrWhiteSpace(line))
+    {
+        continue;
+    }
+
+    // A model run can legitimately stay active for many minutes. Processing
+    // bridge messages serially made every health, recovery and start request
+    // wait behind that run, so the Electron shell reported a false start_task
+    // timeout. Keep protocol writes ordered through outputGate, but allow
+    // independent AgentOS requests to progress concurrently.
+    inFlightRequests.RemoveAll(request => request.IsCompleted);
+    inFlightRequests.Add(ProcessRequestAsync(line));
+}
+
+await Task.WhenAll(inFlightRequests);
+
 internal sealed record BridgeRequest(string Id, string Method, JsonObject? Params);
 internal sealed record BridgeResponse(string Id, object? Result, BridgeError? Error);
 internal sealed record BridgeError(string Code, string Message);
@@ -91,8 +107,13 @@ internal sealed class AgentOsBridgeHost : IDisposable
     private readonly LivingMemoryService _livingMemory;
     private readonly EvolutionLabService _evolutionLab;
     private readonly RemoteCapabilityStoreService _remoteStore;
-    private readonly Dictionary<string, TaskItem> _active =
+    private readonly ConcurrentDictionary<string, TaskItem> _active =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _startGates =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _agentRuns =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim _bootGate = new(1, 1);
     private bool _booted;
 
     public AgentOsBridgeHost(Func<string, object, Task> publish)
@@ -147,18 +168,32 @@ internal sealed class AgentOsBridgeHost : IDisposable
 
     private async Task<object> BootAsync()
     {
-        if (!_booted)
+        if (_booted)
         {
-            var boot = await _kernel.BootAsync();
-            await _supervisor.BootAsync(boot.BootId);
-            await _kernel.ReportServiceAsync(
-                "supervisor",
-                "Agent Supervisor",
-                AgentOsServiceHealth.Ready,
-                "Electron bridge lease layer active",
-                boot.BootId);
-            _booted = true;
+            return ProjectKernel();
         }
+
+        await _bootGate.WaitAsync();
+        try
+        {
+            if (!_booted)
+            {
+                var boot = await _kernel.BootAsync();
+                await _supervisor.BootAsync(boot.BootId);
+                await _kernel.ReportServiceAsync(
+                    "supervisor",
+                    "Agent Supervisor",
+                    AgentOsServiceHealth.Ready,
+                    "Electron bridge lease layer active",
+                    boot.BootId);
+                _booted = true;
+            }
+        }
+        finally
+        {
+            _bootGate.Release();
+        }
+
         return ProjectKernel();
     }
 
@@ -288,6 +323,42 @@ internal sealed class AgentOsBridgeHost : IDisposable
             ? parsedMode
             : AgentExecutionMode.Ask;
         var requestedTaskId = OptionalString(parameters, "taskId");
+        var startKey = requestedTaskId ?? "new-" + Guid.NewGuid().ToString("N");
+        var startGate = _startGates.GetOrAdd(startKey, _ => new SemaphoreSlim(1, 1));
+        await startGate.WaitAsync();
+        try
+        {
+            // A timed-out Electron call may have completed inside AgentOS and
+            // retained the lease. Before run_agent begins, returning that same
+            // active task is the safe idempotent response; acquiring a second
+            // lease would incorrectly report a conflict with our own host.
+            if (requestedTaskId is not null
+                && _active.TryGetValue(requestedTaskId, out var activeTask))
+            {
+                if (_agentRuns.ContainsKey(requestedTaskId))
+                {
+                    throw new InvalidOperationException(
+                        $"Task {requestedTaskId} is already executing. "
+                        + "Wait for the active run or cancel it before retrying.");
+                }
+
+                return ProjectTask(activeTask);
+            }
+
+            return await StartTaskCoreAsync(parameters, prompt, mode, requestedTaskId);
+        }
+        finally
+        {
+            startGate.Release();
+        }
+    }
+
+    private async Task<object> StartTaskCoreAsync(
+        JsonObject parameters,
+        string prompt,
+        AgentExecutionMode mode,
+        string? requestedTaskId)
+    {
         var recovered = requestedTaskId is null
             ? null
             : _snapshots.LoadAll().FirstOrDefault(item =>
@@ -419,12 +490,18 @@ internal sealed class AgentOsBridgeHost : IDisposable
     private async Task<object> RunAgentAsync(JsonObject parameters)
     {
         var task = GetActiveTask(RequiredString(parameters, "taskId"));
+        if (!_agentRuns.TryAdd(task.Id, 0))
+        {
+            throw new InvalidOperationException(
+                $"Task {task.Id} already has an active Agent run.");
+        }
         var prompt = RequiredString(parameters, "prompt");
         var apiKey = OptionalString(parameters, "apiKey") ?? string.Empty;
         var endpoint = OptionalString(parameters, "endpoint");
         var approvalMode = OptionalString(parameters, "approvalMode") ?? "readOnly";
         var attachments = ParseAttachments(parameters["attachments"] as JsonArray);
         var conversationContext = BuildConversationContext(
+            task.Id,
             parameters["conversation"] as JsonArray,
             prompt);
         task.Attachments = attachments;
@@ -591,68 +668,31 @@ internal sealed class AgentOsBridgeHost : IDisposable
         };
     }
 
-    private static string BuildConversationContext(
+    private string BuildConversationContext(
+        string taskId,
         JsonArray? values,
         string currentPrompt)
     {
-        if (values is null || values.Count < 2)
-        {
-            return string.Empty;
-        }
-
-        var turns = values
+        var turns = values?
             .OfType<JsonObject>()
-            .Select(value => new
-            {
-                Role = OptionalString(value, "role")?.Equals(
+            .Select((value, index) => new ConversationTurn(
+                $"transient-{index}",
+                taskId,
+                OptionalString(value, "role")?.Equals(
                     "assistant",
                     StringComparison.OrdinalIgnoreCase) == true
-                    ? "ASSISTANT"
-                    : "USER",
-                Content = OptionalString(value, "content") ?? string.Empty
-            })
+                    ? "assistant"
+                    : "user",
+                OptionalString(value, "content") ?? string.Empty,
+                DateTimeOffset.UnixEpoch.AddSeconds(index)))
             .Where(turn => !string.IsNullOrWhiteSpace(turn.Content))
-            .ToList();
-        if (turns.Count > 0
-            && turns[^1].Role == "USER"
-            && turns[^1].Content.Trim().Equals(
-                currentPrompt.Trim(),
-                StringComparison.Ordinal))
-        {
-            turns.RemoveAt(turns.Count - 1);
-        }
-        if (turns.Count == 0)
-        {
-            return string.Empty;
-        }
-
-        const int maximumCharacters = 48_000;
-        var selected = new List<(string Role, string Content)>();
-        var used = 0;
-        for (var index = turns.Count - 1; index >= 0; index--)
-        {
-            var turn = turns[index];
-            var bounded = LimitForReview(turn.Content, 12_000);
-            if (used + bounded.Length > maximumCharacters && selected.Count > 0)
-            {
-                break;
-            }
-            selected.Add((turn.Role, bounded));
-            used += bounded.Length;
-        }
-        selected.Reverse();
-        var builder = new StringBuilder(
-            "[NOVA CONTINUOUS CONVERSATION CONTEXT]\n"
-            + "以下是同一任务较早轮次的真实对话。延续已确认目标与术语；"
-            + "若历史与当前工作区冲突，以当前工具读取结果为准。\n");
-        foreach (var turn in selected)
-        {
-            builder.AppendLine($"<{turn.Role}>");
-            builder.AppendLine(turn.Content);
-            builder.AppendLine($"</{turn.Role}>");
-        }
-        builder.AppendLine("[CURRENT USER REQUEST FOLLOWS]");
-        return builder.ToString();
+            .ToArray()
+            ?? [];
+        return _conversations.BuildContextPrompt(
+            taskId,
+            currentPrompt,
+            turns,
+            includeCurrentPrompt: false);
     }
 
     private async Task<object> VerifyResultAsync(JsonObject parameters)
@@ -879,7 +919,8 @@ internal sealed class AgentOsBridgeHost : IDisposable
         }
         finally
         {
-            _active.Remove(task.Id);
+            _agentRuns.TryRemove(task.Id, out _);
+            _active.TryRemove(task.Id, out _);
             _governor.EndTask(task.Id);
         }
     }

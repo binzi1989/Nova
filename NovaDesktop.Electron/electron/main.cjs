@@ -119,7 +119,11 @@ class BridgeClient {
       const timeoutMs =
         method === "run_agent" || method === "verify_result"
           ? 30 * 60 * 1000
-          : 20000;
+          : method === "start_task"
+            ? 2 * 60 * 1000
+            : method === "boot"
+              ? 60 * 1000
+              : 30000;
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`AgentOS ${method} 响应超时。`));
