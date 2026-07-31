@@ -1497,7 +1497,7 @@ function App() {
                         spellCheck={false}
                         placeholder={
                           provider === "ollama"
-                            ? "http://127.0.0.1:11434"
+                            ? "http://localhost:11434"
                             : "https://your-provider.example/v1"
                         }
                       />

@@ -263,7 +263,7 @@ function modelDefaults(provider) {
   if (provider === "ollama") {
     return {
       model: "gpt-oss:20b",
-      endpoint: "http://127.0.0.1:11434/v1/chat/completions"
+      endpoint: "http://localhost:11434/api/chat"
     };
   }
   if (provider === "custom") {
@@ -317,6 +317,18 @@ function normalizeCompatibleEndpoint(provider, rawValue) {
   }
 
   let pathname = endpoint.pathname.replace(/\/+$/, "");
+  if (provider === "ollama" && /\/api\/chat$/i.test(pathname)) {
+    endpoint.pathname = pathname;
+    return endpoint.toString();
+  }
+  if (provider === "ollama" && (!pathname || pathname === "/")) {
+    endpoint.pathname = "/api/chat";
+    return endpoint.toString();
+  }
+  if (provider === "ollama" && /\/api$/i.test(pathname)) {
+    endpoint.pathname = `${pathname}/chat`;
+    return endpoint.toString();
+  }
   if (!/\/chat\/completions$/i.test(pathname)) {
     pathname = pathname && pathname !== "/"
       ? /\/v1$/i.test(pathname)
@@ -350,7 +362,9 @@ function normalizeModelConfiguration(value) {
 function modelsEndpoint(configuration) {
   if (configuration.provider === "ollama") {
     const endpoint = new URL(configuration.endpoint);
-    endpoint.pathname = "/api/tags";
+    endpoint.pathname = /\/api\/chat$/i.test(endpoint.pathname)
+      ? endpoint.pathname.replace(/\/api\/chat$/i, "/api/tags")
+      : "/api/tags";
     return endpoint;
   }
   if (configuration.provider === "openai") return new URL("https://api.openai.com/v1/models");
@@ -896,12 +910,22 @@ function registerIpc() {
     senderWindow(event);
     const normalized = normalizeModelConfiguration(configuration);
     const discoveredModels = await probeModelConnection(normalized);
-    if (
-      normalized.provider === "ollama" &&
-      discoveredModels.length &&
-      !discoveredModels.includes(normalized.model)
-    ) {
-      normalized.model = discoveredModels[0];
+    if (normalized.provider === "ollama") {
+      if (!discoveredModels.length) {
+        throw new Error(
+          `Ollama 服务已连接，但没有发现已安装模型。请先运行 ollama pull ${normalized.model}`
+        );
+      }
+      const latestAlias = normalized.model.includes(":")
+        ? normalized.model
+        : `${normalized.model}:latest`;
+      if (!discoveredModels.includes(normalized.model) && discoveredModels.includes(latestAlias)) {
+        normalized.model = latestAlias;
+      } else if (!discoveredModels.includes(normalized.model)) {
+        throw new Error(
+          `Ollama 中未找到模型 ${normalized.model}。当前可用：${discoveredModels.join("、")}`
+        );
+      }
     }
     modelConnections.set(normalized.provider, normalized);
     return {

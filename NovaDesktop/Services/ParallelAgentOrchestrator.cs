@@ -188,6 +188,8 @@ public sealed class ParallelAgentOrchestrator
         {
             throw new InvalidOperationException($"{providerLabel} 缺少有效的 HTTP(S) 接口。");
         }
+        var isNativeOllama = request.Provider.Equals("ollama", StringComparison.OrdinalIgnoreCase)
+                             && endpointUri.AbsolutePath.EndsWith("/api/chat", StringComparison.OrdinalIgnoreCase);
         if (isKimi)
         {
             requestBody.Remove("max_tokens");
@@ -196,6 +198,15 @@ public sealed class ParallelAgentOrchestrator
         else if (isCompatible)
         {
             requestBody.Remove("thinking");
+            if (isNativeOllama)
+            {
+                requestBody.Remove("max_tokens");
+                requestBody["options"] = new JsonObject
+                {
+                    ["num_predict"] = 4096,
+                    ["num_ctx"] = 16384
+                };
+            }
         }
         using var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpointUri);
         if (!string.IsNullOrWhiteSpace(request.ApiKey))
@@ -213,7 +224,9 @@ public sealed class ParallelAgentOrchestrator
         }
 
         var json = JsonNode.Parse(responseText);
-        return json?["choices"]?[0]?["message"]?["content"]?.GetValue<string>()
+        return (isNativeOllama
+                   ? json?["message"]?["content"]?.GetValue<string>()
+                   : json?["choices"]?[0]?["message"]?["content"]?.GetValue<string>())
                ?? "Worker returned no displayable text.";
     }
 

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Xml.Linq;
 using Nova.Core;
@@ -669,6 +670,33 @@ await CheckAsync("Ollama OpenAI-compatible Agent runtime", async () =>
     Expect(handler.UsedConfiguredEndpoint, "Ollama did not use the configured OpenAI-compatible endpoint.");
     Expect(handler.AuthorizationWasOmitted, "Ollama received an unnecessary Authorization header.");
     Expect(handler.ThinkingExtensionWasOmitted, "Ollama received a provider-specific thinking extension.");
+});
+
+await CheckAsync("Ollama native API Agent runtime", async () =>
+{
+    var handler = new FakeOllamaNativeHandler();
+    var runtime = new DeepSeekChatAgentRuntime(new HttpClient(handler), runtimeEvidence);
+    var result = await runtime.RunAsync(
+        new AgentRunRequest(
+            "ollama-native-smoke",
+            "Verify the native Ollama chat protocol.",
+            @"D:\Agent",
+            string.Empty,
+            "ollama",
+            "openbmb/minicpm5:latest",
+            AgentExecutionMode.Build,
+            Endpoint: "http://127.0.0.1:11434/api/chat"),
+        _ => Task.CompletedTask,
+        _ => throw new Exception("Ollama native smoke unexpectedly requested approval."),
+        CancellationToken.None);
+
+    Expect(result.Provider == "ollama", "Ollama native provider metadata was not retained.");
+    Expect(result.FinalText == "Ollama native API connected.", "Ollama NDJSON response was not assembled.");
+    Expect(handler.UsedNativeEndpoint, "Ollama native endpoint was not used.");
+    Expect(handler.UsedNativeRequestShape, "Ollama native request fields were not normalized.");
+    Expect(handler.UsedExpandedContextWindow, "Ollama native request did not reserve an expanded context window.");
+    Expect(handler.AcceptedNdjson, "Ollama native request did not advertise NDJSON.");
+    Expect(handler.AuthorizationWasOmitted, "Ollama native request received an unnecessary Authorization header.");
 });
 
 await CheckAsync("Kimi multimodal API and bounded attachments", async () =>
@@ -5516,6 +5544,30 @@ await CheckAsync("Electron 1.0 trustworthy cross-model delivery contract", async
         "The 1.0 renderer can no longer opt into cross-model review or expose truthful partial delivery.");
 });
 
+await CheckAsync("Electron Ollama native endpoint contract", async () =>
+{
+    var mainSource = await File.ReadAllTextAsync(
+        @"D:\Agent\NovaDesktop.Electron\electron\main.cjs");
+    var rendererSource = await File.ReadAllTextAsync(
+        @"D:\Agent\NovaDesktop.Electron\src\App.tsx");
+    Expect(
+        mainSource.Contains(
+            "endpoint: \"http://localhost:11434/api/chat\"",
+            StringComparison.Ordinal)
+        && mainSource.Contains(
+            "provider === \"ollama\" && /\\/api\\/chat$/i.test(pathname)",
+            StringComparison.Ordinal)
+        && mainSource.Contains(
+            "endpoint.pathname.replace(/\\/api\\/chat$/i, \"/api/tags\")",
+            StringComparison.Ordinal),
+        "Electron no longer preserves Ollama's native /api/chat endpoint and matching model probe path.");
+    Expect(
+        mainSource.Contains("Ollama 服务已连接，但没有发现已安装模型", StringComparison.Ordinal)
+        && mainSource.Contains("Ollama 中未找到模型", StringComparison.Ordinal)
+        && rendererSource.Contains("http://localhost:11434", StringComparison.Ordinal),
+        "Electron no longer gives an actionable missing-model error or localhost guidance.");
+});
+
 await CheckAsync("Electron bridge non-blocking start and lease retry contract", async () =>
 {
     var bridgeSource = await File.ReadAllTextAsync(
@@ -5917,6 +5969,46 @@ file sealed class FakeOllamaCompatibleHandler : HttpMessageHandler
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(response, Encoding.UTF8, "text/event-stream")
+        };
+    }
+}
+
+file sealed class FakeOllamaNativeHandler : HttpMessageHandler
+{
+    public bool UsedNativeEndpoint { get; private set; }
+    public bool UsedNativeRequestShape { get; private set; }
+    public bool UsedExpandedContextWindow { get; private set; }
+    public bool AcceptedNdjson { get; private set; }
+    public bool AuthorizationWasOmitted { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        UsedNativeEndpoint = request.RequestUri?.ToString()
+            .Equals("http://127.0.0.1:11434/api/chat", StringComparison.OrdinalIgnoreCase) == true;
+        AuthorizationWasOmitted = request.Headers.Authorization is null;
+        AcceptedNdjson = request.Headers.Accept.Any(item =>
+            item.MediaType?.Equals("application/x-ndjson", StringComparison.OrdinalIgnoreCase) == true);
+        var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+        UsedNativeRequestShape = body.Contains("\"options\"", StringComparison.Ordinal)
+                                 && body.Contains("\"num_predict\"", StringComparison.Ordinal)
+                                 && !body.Contains("\"max_tokens\"", StringComparison.Ordinal)
+                                 && !body.Contains("\"stream_options\"", StringComparison.Ordinal)
+                                 && !body.Contains("\"tool_choice\"", StringComparison.Ordinal)
+                                 && !body.Contains("\"thinking\"", StringComparison.Ordinal);
+        using var payload = JsonDocument.Parse(body);
+        UsedExpandedContextWindow = payload.RootElement
+            .GetProperty("options")
+            .GetProperty("num_ctx")
+            .GetInt32() >= 8192;
+        const string response = """
+            {"model":"openbmb/minicpm5:latest","created_at":"2026-07-31T10:00:00Z","message":{"role":"assistant","content":"Ollama native API connected."},"done":false}
+            {"model":"openbmb/minicpm5:latest","created_at":"2026-07-31T10:00:01Z","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop"}
+            """;
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(response, Encoding.UTF8, "application/x-ndjson")
         };
     }
 }

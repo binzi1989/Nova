@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.3
+
+### Fixed
+
+- Ollama native `/api/chat` endpoints are preserved instead of being rewritten to an invalid nested URL.
+- Native Ollama NDJSON streaming and tool-call payloads are supported alongside OpenAI-compatible `/v1/chat/completions`.
+- Missing local models and invalid Ollama endpoints now produce actionable diagnostics.
+- The default Ollama address uses `localhost`, avoiding an empty IPv4-only Ollama instance when the active model service is bound to IPv6.
+- Native Ollama runs now size `num_ctx` adaptively from 8K to 64K and use a bounded local output budget, preventing NOVA's system context from overflowing Ollama's 4096-token default.
+
 本项目遵循“先记录真实能力，再发布版本”的原则。未完成签名、公证和真实端到端基准的构建均标记为 Preview。
 
 ## 1.0.2

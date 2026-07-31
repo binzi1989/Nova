@@ -62,6 +62,7 @@ Desktop.ini
 crashes/
 outputs/
 execution-events.jsonl
+backups/
 
 # Credentials and local configuration
 .env

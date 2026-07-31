@@ -425,9 +425,12 @@ public sealed class DeepSeekChatAgentRuntime : IAgentRuntime
         CancellationToken cancellationToken)
     {
         var isKimi = request.Provider.Equals("kimi", StringComparison.OrdinalIgnoreCase);
+        var isOllama = request.Provider.Equals("ollama", StringComparison.OrdinalIgnoreCase);
         var isCompatible = request.Provider.Equals("custom", StringComparison.OrdinalIgnoreCase)
-                           || request.Provider.Equals("ollama", StringComparison.OrdinalIgnoreCase);
+                           || isOllama;
         var providerLabel = GetProviderLabel(request.Provider);
+        var endpoint = ResolveEndpoint(request, isKimi);
+        var isNativeOllama = isOllama && IsOllamaNativeChatEndpoint(endpoint);
         var requestBody = new JsonObject
         {
             ["model"] = request.Model,
@@ -445,7 +448,27 @@ public sealed class DeepSeekChatAgentRuntime : IAgentRuntime
         else if (isCompatible)
         {
             requestBody.Remove("thinking");
-            requestBody["max_tokens"] = request.MaxTokensPerRequest ?? 32768;
+            if (isNativeOllama)
+            {
+                var ollamaOutputTokens = Math.Clamp(
+                    request.MaxTokensPerRequest ?? 4096,
+                    512,
+                    8192);
+                requestBody.Remove("tool_choice");
+                requestBody.Remove("stream_options");
+                requestBody["options"] = new JsonObject
+                {
+                    ["num_predict"] = ollamaOutputTokens,
+                    ["num_ctx"] = ResolveOllamaContextWindow(
+                        messages,
+                        tools,
+                        ollamaOutputTokens)
+                };
+            }
+            else
+            {
+                requestBody["max_tokens"] = request.MaxTokensPerRequest ?? 32768;
+            }
         }
         else
         {
@@ -453,14 +476,14 @@ public sealed class DeepSeekChatAgentRuntime : IAgentRuntime
             requestBody["user_id"] = CreateUserId();
         }
 
-        var endpoint = ResolveEndpoint(request, isKimi);
         using var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpoint);
         if (!string.IsNullOrWhiteSpace(request.ApiKey))
         {
             httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", request.ApiKey);
         }
         httpRequest.Headers.UserAgent.ParseAdd($"NOVA-Desktop/{NovaProductVersion.Current}");
-        httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+        httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(
+            isNativeOllama ? "application/x-ndjson" : "text/event-stream"));
         httpRequest.Content = new StringContent(requestBody.ToJsonString(), Encoding.UTF8, "application/json");
 
         using var response = await _httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -480,12 +503,20 @@ public sealed class DeepSeekChatAgentRuntime : IAgentRuntime
 
         while (await reader.ReadLineAsync(cancellationToken) is { } line)
         {
-            if (!line.StartsWith("data:", StringComparison.Ordinal))
+            string payload;
+            if (isNativeOllama)
+            {
+                payload = line.Trim();
+            }
+            else if (line.StartsWith("data:", StringComparison.Ordinal))
+            {
+                payload = line[5..].Trim();
+            }
+            else
             {
                 continue;
             }
 
-            var payload = line[5..].Trim();
             if (payload.Length == 0 || payload == "[DONE]")
             {
                 if (payload == "[DONE]")
@@ -501,15 +532,23 @@ public sealed class DeepSeekChatAgentRuntime : IAgentRuntime
                 continue;
             }
 
-            responseId = chunk["id"]?.GetValue<string>() ?? responseId;
-            var choice = chunk["choices"]?.AsArray().FirstOrDefault()?.AsObject();
-            var delta = choice?["delta"]?.AsObject();
+            responseId = chunk["id"]?.GetValue<string>()
+                         ?? chunk["created_at"]?.GetValue<string>()
+                         ?? responseId;
+            var delta = isNativeOllama
+                ? chunk["message"]?.AsObject()
+                : chunk["choices"]?.AsArray().FirstOrDefault()?.AsObject()?["delta"]?.AsObject();
             if (delta is null)
             {
+                if (isNativeOllama && chunk["done"]?.GetValue<bool>() == true)
+                {
+                    break;
+                }
                 continue;
             }
 
-            var reasoning = delta["reasoning_content"]?.GetValue<string>();
+            var reasoning = delta["reasoning_content"]?.GetValue<string>()
+                            ?? delta["thinking"]?.GetValue<string>();
             if (!thinkingSeen && !string.IsNullOrWhiteSpace(reasoning))
             {
                 thinkingSeen = true;
@@ -533,6 +572,7 @@ public sealed class DeepSeekChatAgentRuntime : IAgentRuntime
                     0));
             }
 
+            var fallbackToolIndex = 0;
             foreach (var toolDeltaNode in delta["tool_calls"]?.AsArray() ?? [])
             {
                 if (toolDeltaNode is not JsonObject toolDelta)
@@ -540,7 +580,8 @@ public sealed class DeepSeekChatAgentRuntime : IAgentRuntime
                     continue;
                 }
 
-                var index = toolDelta["index"]?.GetValue<int>() ?? 0;
+                var index = toolDelta["index"]?.GetValue<int>() ?? fallbackToolIndex;
+                fallbackToolIndex++;
                 if (!toolCalls.TryGetValue(index, out var accumulator))
                 {
                     accumulator = new ToolCallAccumulator();
@@ -550,11 +591,16 @@ public sealed class DeepSeekChatAgentRuntime : IAgentRuntime
                 accumulator.Id = toolDelta["id"]?.GetValue<string>() ?? accumulator.Id;
                 var function = toolDelta["function"]?.AsObject();
                 accumulator.Name = function?["name"]?.GetValue<string>() ?? accumulator.Name;
-                var argumentDelta = function?["arguments"]?.GetValue<string>();
+                var argumentDelta = SerializeToolArguments(function?["arguments"]);
                 if (!string.IsNullOrEmpty(argumentDelta))
                 {
                     accumulator.Arguments.Append(argumentDelta);
                 }
+            }
+
+            if (isNativeOllama && chunk["done"]?.GetValue<bool>() == true)
+            {
+                break;
             }
         }
 
@@ -575,16 +621,25 @@ public sealed class DeepSeekChatAgentRuntime : IAgentRuntime
         if (calls.Length > 0)
         {
             assistantMessage["tool_calls"] = new JsonArray(calls.Select(call =>
-                new JsonObject
-                {
-                    ["id"] = call.Id,
-                    ["type"] = "function",
-                    ["function"] = new JsonObject
+                isNativeOllama
+                    ? new JsonObject
                     {
-                        ["name"] = call.Name,
-                        ["arguments"] = call.Arguments
+                        ["function"] = new JsonObject
+                        {
+                            ["name"] = call.Name,
+                            ["arguments"] = ParseToolArguments(call.Arguments)
+                        }
                     }
-                }).ToArray());
+                    : new JsonObject
+                    {
+                        ["id"] = call.Id,
+                        ["type"] = "function",
+                        ["function"] = new JsonObject
+                        {
+                            ["name"] = call.Name,
+                            ["arguments"] = call.Arguments
+                        }
+                    }).ToArray());
         }
 
         return new StreamedCompletion(responseId, content.ToString(), assistantMessage, calls);
@@ -728,12 +783,79 @@ public sealed class DeepSeekChatAgentRuntime : IAgentRuntime
                 : "https://api.deepseek.com/chat/completions");
     }
 
+    private static bool IsOllamaNativeChatEndpoint(Uri endpoint)
+        => endpoint.AbsolutePath.EndsWith("/api/chat", StringComparison.OrdinalIgnoreCase);
+
+    private static int ResolveOllamaContextWindow(
+        JsonArray messages,
+        JsonArray tools,
+        int outputTokens)
+    {
+        // System.Text.Json escapes non-ASCII text, so dividing serialized characters by
+        // three is deliberately conservative for both Chinese and English prompts.
+        var serializedCharacters = messages.ToJsonString().Length + tools.ToJsonString().Length;
+        var estimatedPromptTokens = Math.Max(1, (serializedCharacters + 2) / 3);
+        var requiredTokens = estimatedPromptTokens + outputTokens + 1024;
+        var contextWindow = 8192;
+        while (contextWindow < requiredTokens && contextWindow < 65536)
+        {
+            contextWindow *= 2;
+        }
+
+        return Math.Clamp(contextWindow, 8192, 65536);
+    }
+
+    private static string? SerializeToolArguments(JsonNode? arguments)
+    {
+        if (arguments is null)
+        {
+            return null;
+        }
+
+        if (arguments is JsonValue value && value.TryGetValue<string>(out var text))
+        {
+            return text;
+        }
+
+        return arguments.ToJsonString();
+    }
+
+    private static JsonNode ParseToolArguments(string arguments)
+    {
+        try
+        {
+            return JsonNode.Parse(arguments) ?? new JsonObject();
+        }
+        catch (JsonException)
+        {
+            return JsonValue.Create(arguments)!;
+        }
+    }
+
     private static string ParseApiError(string responseText, int statusCode, string providerLabel)
     {
         try
         {
             var json = JsonNode.Parse(responseText);
-            var message = json?["error"]?["message"]?.GetValue<string>();
+            var error = json?["error"];
+            var message = error is JsonValue value && value.TryGetValue<string>(out var text)
+                ? text
+                : error?["message"]?.GetValue<string>();
+            if (providerLabel == "Ollama" && statusCode == 404 && message?.Contains("not found", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                return $"Ollama 未安装所选模型：{message}。请先运行 ollama pull <模型名>，再重新连接。";
+            }
+            if (providerLabel == "Ollama" && statusCode == 404 && responseText.Contains("page not found", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Ollama 接口地址无效。请使用 http://localhost:11434/api/chat 或仅填写 http://localhost:11434。";
+            }
+            if (providerLabel == "Ollama"
+                && statusCode == 400
+                && (responseText.Contains("exceeds the available context size", StringComparison.OrdinalIgnoreCase)
+                    || responseText.Contains("exceed_context_size", StringComparison.OrdinalIgnoreCase)))
+            {
+                return "Ollama 上下文窗口不足。NOVA 已自动申请更大的上下文；若模型仍拒绝，请确认使用 /api/chat 原生接口，或设置 OLLAMA_CONTEXT_LENGTH=16384 后重启 Ollama。";
+            }
             return $"{providerLabel} API {statusCode}: {message ?? responseText}";
         }
         catch
