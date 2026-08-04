@@ -20,7 +20,7 @@
 </p>
 
 > [!IMPORTANT]
-> 当前稳定基线为 `1.0.3`。安装包尚未签名，自动更新默认关闭；最新可下载版本请以 [GitHub Releases](https://github.com/binzi1989/Nova/releases) 为准。
+> 当前稳定基线为 `1.1.0`。安装包尚未签名，自动更新默认关闭；最新可下载版本请以 [GitHub Releases](https://github.com/binzi1989/Nova/releases) 为准。
 
 ## NOVA 是什么
 
