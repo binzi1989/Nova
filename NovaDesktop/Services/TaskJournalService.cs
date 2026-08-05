@@ -103,4 +103,49 @@ public sealed class TaskJournalService
             .OrderBy(entry => entry.Timestamp)
             .ToArray();
     }
+
+    public async Task<int> DeleteTaskAsync(
+        string taskId,
+        CancellationToken cancellationToken = default)
+    {
+        await _writeLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (!File.Exists(_journalPath))
+            {
+                return 0;
+            }
+
+            var retained = new List<string>();
+            var deleted = 0;
+            foreach (var line in File.ReadLines(_journalPath))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    var entry = JsonSerializer.Deserialize<TaskJournalEntry>(line);
+                    if (entry is not null
+                        && entry.TaskId.Equals(taskId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        deleted++;
+                        continue;
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Preserve malformed legacy lines rather than deleting unrelated data.
+                }
+                retained.Add(line);
+            }
+
+            var temporaryPath = _journalPath + ".tmp";
+            await File.WriteAllLinesAsync(temporaryPath, retained, cancellationToken);
+            File.Move(temporaryPath, _journalPath, overwrite: true);
+            return deleted;
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
 }

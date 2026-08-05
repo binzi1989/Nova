@@ -6,7 +6,7 @@ export interface Attachment {
   name: string;
   path: string;
   size: number;
-  kind: "image" | "text";
+  kind: "image" | "text" | "document";
 }
 
 export interface Message {
@@ -37,6 +37,16 @@ export interface DeliveryProof {
   validationRuns: number;
 }
 
+export interface DeliveryArtifactPreview {
+  path: string;
+  name: string;
+  size: number;
+  truncated: boolean;
+  kind: "markdown" | "text";
+  language: string;
+  content: string;
+}
+
 export interface AgentTask {
   id: string;
   title: string;
@@ -49,6 +59,7 @@ export interface AgentTask {
   workspaceRoot?: string;
   provider?: string;
   model?: string;
+  agentPackId?: string | null;
   executionMode?: string;
   hasResult?: boolean;
 }
@@ -96,6 +107,260 @@ export interface AgentEvent {
   detail: string;
   progress: number;
   activeUnits: number;
+  packId?: string | null;
+}
+
+export interface AgentPackSummary {
+  id: string;
+  name: string;
+  version: string;
+  status: string;
+  category: string;
+  description: string;
+  enabled: boolean;
+  builtIn: boolean;
+  declaredCapabilities: string[];
+  starterPrompts: string[];
+  agentCount: number;
+  workflowCount: number;
+}
+
+export interface AgentCreationTemplate {
+  id: string;
+  name: string;
+  description: string;
+  defaultArtifact: string;
+  defaultSteps: string[];
+  evidenceRules: string[];
+}
+
+export interface AgentPackCreationRequest {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  objective: string;
+  scenarioProfile: string;
+  autonomyLevel: string;
+  lifecycle: string;
+  collaborationMode: string;
+  deliveryMode: string;
+  decisionStyle: string;
+  primaryArtifact: string;
+  requiredInputs: string[];
+  recommendedInputs: string[];
+  starterPrompts: string[];
+  orchestration?: AgentWorkshopOrchestrationDraft | null;
+}
+
+export interface AgentPackCertificationReport {
+  standardVersion: string;
+  level: "Draft" | "Runnable" | "Verified" | "Production";
+  score: number;
+  checks: Array<{ id: string; name: string; passed: boolean; detail: string }>;
+  nextActions: string[];
+}
+
+export interface AgentPackCreationResult {
+  pack: AgentPackSummary;
+  certification: AgentPackCertificationReport;
+}
+
+export interface AgentWorkshopRecommendation {
+  summary: string;
+  requiredInputs: string[];
+  recommendedInputs: string[];
+  starterPrompts: string[];
+  designSignals: string[];
+}
+
+export interface AgentWorkshopRoleDraft {
+  id: string;
+  name: string;
+  responsibility: string;
+  deliverables: string[];
+}
+
+export interface AgentWorkshopStepDraft {
+  order: number;
+  title: string;
+  owner: string;
+  output: string;
+  acceptance: string[];
+}
+
+export interface AgentWorkshopOrchestrationDraft {
+  summary: string;
+  designRationale: string[];
+  roles: AgentWorkshopRoleDraft[];
+  workflow: AgentWorkshopStepDraft[];
+  requiredInputs: string[];
+  recommendedInputs: string[];
+  starterPrompts: string[];
+  risks: string[];
+  reviewVerdict: "approved" | "revise";
+  modelProvider: string;
+  model: string;
+}
+
+export interface AgentWorkshopOrchestrationEvent {
+  sessionId: string;
+  agent: string;
+  status: "running" | "done" | "failed";
+  detail: string;
+  output: string;
+  at: string;
+}
+
+export interface AgentWorkshopReadyEvent {
+  sessionId: string;
+  draft?: AgentWorkshopOrchestrationDraft;
+  error?: string;
+}
+
+export interface AgentWorkshopDesignSession {
+  id: string;
+  status: "running" | "completed" | "failed" | "cancelled" | "interrupted";
+  name: string;
+  provider: Provider;
+  model: string;
+  request: AgentPackCreationRequest & { provider?: Provider; model?: string };
+  events: AgentWorkshopOrchestrationEvent[];
+  draft: AgentWorkshopOrchestrationDraft | null;
+  error: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentCalibrationPatch {
+  id: string;
+  packId: string;
+  version: number;
+  scope: "turn" | "project" | "agent" | "organization";
+  scopeKey: string;
+  scopeLabel: string;
+  category: "fact" | "judgment" | "workflow" | "format" | "evidence" | "permission" | "tone" | "other";
+  instruction: string;
+  sourceTaskId: string | null;
+  sourceTitle: string | null;
+  sourcePath: string | null;
+  state: "active" | "rolled-back";
+  regressionStatus: "pending" | "passed" | "failed";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentCalibrationSnapshot {
+  packId: string;
+  version: number;
+  activeCount: number;
+  patches: AgentCalibrationPatch[];
+}
+
+export interface AgentPackDetails {
+  summary: AgentPackSummary;
+  charter: string;
+  agentRoster: string;
+  workflows: Array<{
+    id: string;
+    name: string;
+    executionMode: string;
+    stepCount: number;
+    steps: Array<{
+      id: string;
+      agent: string;
+      title: string;
+      outputs: string[];
+      acceptance: string[];
+    }>;
+  }>;
+  deliveryTemplate: string;
+  permissions: string[];
+  externalActions: Record<string, string>;
+  onboarding: AgentPackOnboarding | null;
+  capabilityRequirements: AgentPackCapabilityRequirements | null;
+  certification: AgentPackCertificationReport | null;
+}
+
+export interface AgentPackCapabilityRequirements {
+  version: string;
+  items: Array<{
+    id: string;
+    kind: "mcp" | "skill";
+    name: string;
+    reason: string;
+    required: boolean;
+    matchIds: string[];
+    catalogId: string | null;
+  }>;
+}
+
+export interface AgentPackCapabilityReport {
+  packId: string;
+  version: string;
+  ready: boolean;
+  readyCount: number;
+  requiredCount: number;
+  requiredReadyCount: number;
+  items: Array<{
+    id: string;
+    kind: "mcp" | "skill";
+    name: string;
+    reason: string;
+    required: boolean;
+    matchIds: string[];
+    catalogId: string | null;
+    state: "ready" | "registered-disabled" | "available" | "missing";
+    matchedId: string | null;
+    matchedName: string | null;
+    catalogName: string | null;
+    action: "none" | "enable" | "load" | "scan" | "store";
+  }>;
+}
+
+export interface McpDiscoveryCandidate {
+  id: string;
+  name: string;
+  sourceProduct: string;
+  sourcePath: string;
+  isCompatible: boolean;
+  isAlreadyRegistered: boolean;
+  canImport: boolean;
+  mayAcquireSoftware: boolean;
+  omittedSecretCount: number;
+  riskLabel: string;
+  summary: string;
+  notes: string;
+}
+
+export interface McpDiscoveryResult {
+  canceled: boolean;
+  candidates: McpDiscoveryCandidate[];
+  scannedPaths: string[];
+  warnings: string[];
+}
+
+export interface AgentPackOnboarding {
+  version: string;
+  headline: string;
+  description: string;
+  steps: Array<{
+    id: string;
+    title: string;
+    description: string;
+    kind: "text" | "select" | "attachment";
+    required: boolean;
+    placeholder: string;
+    options: string[];
+    whyItMatters: string;
+    example: string;
+  }>;
+  outcomes: Array<{
+    id: string;
+    title: string;
+    description: string;
+    promptTemplate: string;
+  }>;
 }
 
 export interface StoreCapabilityItem {
@@ -231,6 +496,50 @@ export interface DesktopSnapshot {
   }>;
 }
 
+export interface KnowledgeDocument {
+  id: string;
+  workspaceRoot: string;
+  relativePath: string;
+  title: string;
+  extension: string;
+  sizeBytes: number;
+  chunkCount: number;
+  indexedAt: string;
+}
+
+export interface KnowledgeState {
+  workspaceRoot: string | null;
+  indexPath: string;
+  updatedAt: string;
+  count: number;
+  chunks: number;
+  bytes: number;
+  documents: KnowledgeDocument[];
+  graph: {
+    graphPath: string;
+    updatedAt: string;
+    nodeCount: number;
+    edgeCount: number;
+    nodes: Array<{
+      id: string;
+      label: string;
+      kind: string;
+      detail: string;
+      weight: number;
+      updatedAt: string;
+    }>;
+  };
+}
+
+export interface KnowledgeSearchResult {
+  documentId: string;
+  relativePath: string;
+  title: string;
+  startLine: number;
+  score: number;
+  snippet: string;
+}
+
 export interface BootInfo {
   appVersion: string;
   platform: string;
@@ -255,6 +564,13 @@ export interface NovaApi {
     }): Promise<{ task: AgentTask; messages: Message[] }>;
     archiveTask(request: { taskId: string }): Promise<{ archived: boolean }>;
     restoreTask(request: { taskId: string }): Promise<{ archived: boolean }>;
+    deleteArchivedTask(request: {
+      taskId: string;
+    }): Promise<{ deleted: boolean; retainedWorkspaceFiles: boolean }>;
+    readDeliveryArtifact(request: {
+      path: string;
+      workspace: string | null;
+    }): Promise<DeliveryArtifactPreview>;
     selectWorkspace(): Promise<string | null>;
     selectAttachments(): Promise<Attachment[]>;
     desktopSnapshot(): Promise<DesktopSnapshot>;
@@ -283,6 +599,7 @@ export interface NovaApi {
       approvalMode: "workspace" | "workspaceDesktop" | "readOnly";
       executionMode: ExecutionMode;
       crossModelReview?: boolean;
+      agentPackId?: string | null;
     }): Promise<{
       taskId: string;
       output: string;
@@ -304,6 +621,55 @@ export interface NovaApi {
       query: string;
     }): Promise<CapabilityStoreResult>;
     installStore(request: { id: string }): Promise<unknown>;
+    discoverMcp(request: { workspace: string | null }): Promise<McpDiscoveryResult>;
+    previewMcpConfig(request: {
+      workspace: string | null;
+      configuration: string;
+      authorizationEnvironment?: string;
+    }): Promise<Omit<McpDiscoveryResult, "canceled">>;
+    importDiscoveredMcp(request: {
+      candidates: McpDiscoveryCandidate[];
+    }): Promise<{ canceled: boolean; imported: string[]; skipped: string[]; enabled?: boolean }>;
+  };
+  agentPacks: {
+    list(): Promise<AgentPackSummary[]>;
+    get(request: { id: string }): Promise<AgentPackDetails>;
+    listCreationTemplates(): Promise<AgentCreationTemplate[]>;
+    recommend(request: AgentPackCreationRequest): Promise<AgentWorkshopRecommendation>;
+    getDesignSession(): Promise<AgentWorkshopDesignSession | null>;
+    orchestrate(request: Omit<AgentPackCreationRequest, "requiredInputs" | "recommendedInputs" | "starterPrompts" | "orchestration"> & {
+      provider: Provider;
+      model: string;
+    }): Promise<{ session: AgentWorkshopDesignSession }>;
+    cancelOrchestration(): Promise<{ canceled: boolean; sessionId?: string }>;
+    create(request: AgentPackCreationRequest): Promise<{
+      canceled: boolean;
+      task: AgentTask | null;
+    }>;
+    onOrchestrationEvent(listener: (event: AgentWorkshopOrchestrationEvent) => void): () => void;
+    onOrchestrationReady(listener: (event: AgentWorkshopReadyEvent) => void): () => void;
+    listCalibrations(request: { packId: string }): Promise<AgentCalibrationSnapshot>;
+    createCalibration(request: {
+      packId: string;
+      scope: AgentCalibrationPatch["scope"];
+      category: AgentCalibrationPatch["category"];
+      instruction: string;
+      taskId: string | null;
+      workspaceRoot: string | null;
+      sourceTitle?: string | null;
+      sourcePath?: string | null;
+    }): Promise<AgentCalibrationSnapshot>;
+    rollbackCalibration(request: {
+      packId: string;
+      patchId: string;
+    }): Promise<AgentCalibrationSnapshot>;
+    getCapabilities(request: {
+      id: string;
+      workspace: string | null;
+    }): Promise<AgentPackCapabilityReport>;
+    install(): Promise<{ canceled: boolean; pack: AgentPackSummary | null }>;
+    setEnabled(request: { id: string; enabled: boolean }): Promise<AgentPackSummary>;
+    remove(request: { id: string }): Promise<{ canceled: boolean; removed: boolean; id?: string }>;
   };
   extensions: {
     listProfiles(): Promise<{ ssh: unknown[]; cloud: unknown[] }>;
@@ -338,6 +704,27 @@ export interface NovaApi {
     adoptEvolution(request: { id: string }): Promise<EvolutionLabState>;
     rejectEvolution(request: { id: string }): Promise<EvolutionLabState>;
     onEvolutionEvent(listener: (event: EvolutionDiscoveryEvent) => void): () => void;
+  };
+  knowledge: {
+    getState(request: { workspace: string | null }): Promise<KnowledgeState>;
+    indexWorkspace(request: { workspace: string }): Promise<{
+      summary: {
+        scannedFiles: number;
+        indexedFiles: number;
+        reusedFiles: number;
+        removedFiles: number;
+        skippedFiles: number;
+        chunkCount: number;
+        indexedBytes: number;
+        completedAt: string;
+      };
+      graph: { updatedAt: string; nodeCount: number; edgeCount: number };
+    }>;
+    search(request: {
+      workspace: string | null;
+      query: string;
+      maximumResults?: number;
+    }): Promise<{ query: string; workspaceRoot: string | null; results: KnowledgeSearchResult[] }>;
   };
   window: {
     minimize(): Promise<void>;

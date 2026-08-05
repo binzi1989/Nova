@@ -10,7 +10,9 @@ public sealed class InputAttachmentService
     public const int MaximumAttachmentCount = 6;
     public const long MaximumImageBytes = 10 * 1024 * 1024;
     public const long MaximumTextBytes = 1024 * 1024;
+    public const long MaximumDocumentBytes = 12 * 1024 * 1024;
     public const long MaximumTotalBytes = 20 * 1024 * 1024;
+    public const int MaximumExtractedCharactersPerAttachment = 60_000;
 
     private static readonly IReadOnlyDictionary<string, string> ImageTypes =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -19,6 +21,17 @@ public sealed class InputAttachmentService
             [".jpg"] = "image/jpeg",
             [".jpeg"] = "image/jpeg",
             [".webp"] = "image/webp"
+        };
+
+    private static readonly IReadOnlyDictionary<string, string> DocumentTypes =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [".pdf"] = "application/pdf",
+            [".doc"] = "application/msword",
+            [".docx"] = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            [".docm"] = "application/vnd.ms-word.document.macroEnabled.12",
+            [".dotx"] = "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
+            [".dotm"] = "application/vnd.ms-word.template.macroEnabled.12"
         };
 
     private static readonly HashSet<string> TextExtensions =
@@ -81,6 +94,12 @@ public sealed class InputAttachmentService
                 mediaType = imageType;
                 maximumBytes = MaximumImageBytes;
             }
+            else if (DocumentTypes.TryGetValue(extension, out var documentType))
+            {
+                kind = AgentAttachmentKind.Document;
+                mediaType = documentType;
+                maximumBytes = MaximumDocumentBytes;
+            }
             else if (TextExtensions.Contains(extension))
             {
                 kind = AgentAttachmentKind.Text;
@@ -90,14 +109,19 @@ public sealed class InputAttachmentService
             else
             {
                 throw new InvalidOperationException(
-                    $"暂不支持 {extension} 文件。当前可直接理解 PNG/JPEG/WebP 和常见文本、代码、配置文件。");
+                    $"暂不支持 {extension} 文件。当前可直接理解 PDF、Word、PNG/JPEG/WebP 和常见文本、代码、配置文件。");
             }
 
             if (info.Length <= 0 || info.Length > maximumBytes)
             {
                 var limit = maximumBytes / 1024 / 1024;
                 throw new InvalidOperationException(
-                    $"{info.Name} 大小不符合要求；{(kind == AgentAttachmentKind.Image ? "图片" : "文本文件")}上限为 {limit} MB。");
+                    $"{info.Name} 大小不符合要求；{(kind switch
+                    {
+                        AgentAttachmentKind.Image => "图片",
+                        AgentAttachmentKind.Document => "PDF/Word 文档",
+                        _ => "文本文件"
+                    })}上限为 {limit} MB。");
             }
             if (selected.Sum(item => item.SizeBytes) + info.Length > MaximumTotalBytes)
             {
@@ -254,6 +278,30 @@ public sealed class InputAttachmentService
         AgentInputAttachment attachment,
         CancellationToken cancellationToken)
     {
+        if (attachment.IsDocument)
+        {
+            var document = await DocumentAttachmentTextExtractor.ExtractAsync(
+                attachment.LocalPath,
+                cancellationToken);
+            var documentText = document.Text.Replace("\0", string.Empty, StringComparison.Ordinal).Trim();
+            var truncated = documentText.Length > MaximumExtractedCharactersPerAttachment;
+            if (truncated)
+            {
+                documentText = documentText[..MaximumExtractedCharactersPerAttachment];
+            }
+            if (string.IsNullOrWhiteSpace(documentText))
+            {
+                documentText = "未检测到可搜索文字。该文件可能是扫描件或仅包含图片；请改用支持视觉/OCR 的模型，或上传可搜索版本。";
+            }
+            var pageLabel = document.PageCount is { } pageCount
+                ? $"；页数：{pageCount}"
+                : string.Empty;
+            var truncatedLabel = truncated
+                ? "；内容过长，已按上下文安全上限截断"
+                : string.Empty;
+            return $"[附件：{attachment.FileName}；格式：{document.Format}{pageLabel}{truncatedLabel}]\n{documentText}";
+        }
+
         var text = await File.ReadAllTextAsync(attachment.LocalPath, Encoding.UTF8, cancellationToken);
         if (text.IndexOf('\0') >= 0)
         {

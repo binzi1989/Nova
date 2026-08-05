@@ -210,7 +210,7 @@ public sealed class ArtifactRepositoryService
     {
         var taskDirectory = Path.Combine(_outputRoot, SafeSegment(task.Id));
         Directory.CreateDirectory(taskDirectory);
-        var stem = SafeSegment($"{draft.Type}-{draft.Title}");
+        var stem = SafeSegment(BuildFileStem(draft));
         if (stem.Length > 64)
         {
             stem = stem[..64];
@@ -300,6 +300,36 @@ public sealed class ArtifactRepositoryService
 
     private static string NormalizePreview(string preview)
         => preview.Replace("\0", string.Empty).Trim();
+
+    private static string BuildFileStem(ArtifactItem draft)
+    {
+        var type = draft.Type.Trim().ToLowerInvariant();
+        if (type is "code" or "source" or "patch" or "build" or "test"
+            or "engineering" or "project")
+        {
+            return $"{type}-{draft.Title}";
+        }
+
+        var prefix = type switch
+        {
+            "answer" => "成果",
+            "report" => "报告",
+            "analysis" => "分析",
+            "research" => "调研报告",
+            "plan" => "执行方案",
+            "evidence" => "证据清单",
+            "record" => "任务记录",
+            "context" => "上下文摘要",
+            "mission" => "目标契约",
+            "decision" => "决策报告",
+            "brief" => "简报",
+            _ => "交付物"
+        };
+        var title = draft.Title.Trim();
+        return title.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            ? title
+            : $"{prefix}-{title}";
+    }
 
     private static string CreateSeriesId(string taskId, string type, string title)
     {

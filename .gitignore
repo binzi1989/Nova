@@ -29,11 +29,15 @@ pnpm-debug.log*
 # Generated releases and QA workspaces
 /dist/
 /artifacts/
+/.artifacts/
 /.mac-release/
 /.qa-build/
 /.release-bin/
 /.tmp-*/
 /packaging/output/
+/releases/
+*.inspect.ndjson
+**/*_wpftmp.csproj
 
 # Local SDKs, caches and agent metadata
 /.dotnet-home/
@@ -43,6 +47,9 @@ pnpm-debug.log*
 /.agents/
 /.codex/
 /.nova/
+industry-packs/*/.nova/
+industry-packs/*/cases/
+industry-packs/*/_setup_dir.py
 **/.cache/
 **/.pytest_cache/
 

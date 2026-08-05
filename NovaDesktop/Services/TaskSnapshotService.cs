@@ -21,7 +21,8 @@ public sealed record TaskSnapshot(
     string Draft = "",
     IReadOnlyList<AgentInputAttachment>? Attachments = null,
     bool IsArchived = false,
-    long ExecutionSequence = 0);
+    long ExecutionSequence = 0,
+    string? AgentPackId = null);
 
 public sealed class TaskSnapshotService
 {
@@ -59,7 +60,8 @@ public sealed class TaskSnapshotService
             task.Draft,
             task.Attachments,
             task.IsArchived,
-            task.ExecutionSequence);
+            task.ExecutionSequence,
+            task.AgentPackId);
         var path = GetPath(task.Id);
         var temporaryPath = path + ".tmp";
         var json = JsonSerializer.Serialize(snapshot, _jsonOptions);
@@ -127,6 +129,33 @@ public sealed class TaskSnapshotService
                 }
             })
             .ToArray();
+
+    public async Task<bool> DeleteAsync(
+        string taskId,
+        CancellationToken cancellationToken = default)
+    {
+        var path = GetPath(taskId);
+        await _writeLock.WaitAsync(cancellationToken);
+        try
+        {
+            var deleted = false;
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+                deleted = true;
+            }
+            var temporaryPath = path + ".tmp";
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+            return deleted;
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
 
     private string GetPath(string taskId)
     {

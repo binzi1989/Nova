@@ -1,6 +1,6 @@
 {
   "name": "nova-agentos-electron",
-  "version": "1.0.3",
+  "version": "1.1.0-preview.15",
   "private": true,
   "author": "NOVA AgentOS Project",
   "description": "NOVA AgentOS next-generation desktop shell",
@@ -15,6 +15,7 @@
     "package:win:zip": "npm run build && electron-builder --win zip",
     "package:mac": "node scripts/build-mac.mjs",
     "smoke": "electron . --smoke",
+    "smoke:workshop": "electron . --smoke-workshop-recovery",
     "smoke:bridge": "node scripts/smoke-bridge.mjs"
   },
   "dependencies": {
@@ -54,6 +55,27 @@
         "to": "bridge",
         "filter": [
           "**/*"
+        ]
+      },
+      {
+        "from": "../industry-packs",
+        "to": "agent-packs",
+        "filter": [
+          "README.md",
+          "*/nova.industry.json",
+          "*/agent-card.json",
+          "*/certification.json",
+          "*/INDUSTRY_CHARTER.md",
+          "*/agents/**/*",
+          "*/workflows/**/*",
+          "*/delivery-templates/**/*",
+          "*/knowledge/**/*",
+          "*/evaluations/**/*",
+          "!*/cases/**/*",
+          "!*/.nova/**/*",
+          "!*/workflows/mx-garlic-chopper-market-entry.json",
+          "!*/knowledge/mx-garlic-chopper-baseline.json",
+          "!*/evaluations/mx-garlic-chopper-001.json"
         ]
       }
     ],

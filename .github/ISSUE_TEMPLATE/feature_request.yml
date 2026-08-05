@@ -1,0 +1,43 @@
+name: Feature request
+description: 提议一个有明确使用场景的能力或体验改进
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题？
+      description: 请先描述真实工作场景，而不是直接给出功能名称
+      placeholder: 当我……时，目前需要……，因此……
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 理想结果
+      description: 用户最终应该看到或得到什么？
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 如何验证它确实有效？
+      placeholder: 例如减少步骤、产生可检查文件、通过某项构建或任务基准
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 涉及范围
+      options:
+        - 桌面交互
+        - 模型与上下文
+        - 文件与工程执行
+        - Agent / 多 Agent
+        - MCP / Skills / 扩展坞
+        - Agent Pack / 行业场景
+        - 恢复、权限或预算
+        - 其他
+    validations:
+      required: true

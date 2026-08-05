@@ -38,7 +38,8 @@ public sealed class OpenAIResponsesAgentRuntime : IAgentRuntime
                 scheduleService.CreateAsync(arguments, request, token),
             evidenceLedger: _evidenceLedger,
             taskId: request.TaskId,
-            allowedWriteScopes: request.AllowedWriteScopes);
+            allowedWriteScopes: request.AllowedWriteScopes,
+            agentPackId: request.AgentPackId);
         var userContent = await InputAttachmentService.BuildOpenAiContentAsync(
             request.Prompt,
             request.Attachments,
@@ -388,11 +389,17 @@ public sealed class OpenAIResponsesAgentRuntime : IAgentRuntime
     private static IReadOnlyList<JsonObject> FilterRuntimeTools(
         IReadOnlyList<JsonObject> definitions,
         AgentRunRequest request)
-        => AgentExecutionPolicy
+        => request.TaskId.StartsWith("design:", StringComparison.OrdinalIgnoreCase)
+            ? []
+            : AgentExecutionPolicy
             .FilterTools(definitions, request.ExecutionMode)
             .Where(definition =>
                 request.AllowParallelDelegation
                 || definition["name"]?.GetValue<string>() != "delegate_parallel_tasks")
+            .Where(definition =>
+                request.AllowedToolNames is null
+                || request.AllowedToolNames.Contains(
+                    definition["name"]?.GetValue<string>() ?? string.Empty))
             .ToArray();
 
     private static AgentToolInvocation ParseToolInvocation(JsonObject call)
@@ -491,6 +498,8 @@ public sealed class OpenAIResponsesAgentRuntime : IAgentRuntime
            start lines. Only request a workspace indexing pass when the index is missing or stale and the user wants it.
            When a prompt references a NOVA artifact ID or prior deliverable, list persisted artifacts and read the requested
            version before continuing. Artifact tools are read-only and preserve the original deliverable.
+           For non-programming deliverables such as reports, plans, research, lists and copy, use concise Chinese file names.
+           For programming projects, preserve ecosystem conventions and never translate names such as package.json or README.md.
            Do not ask an open-ended clarification when two to five concrete alternatives would be easier to choose.
            In that case, write one short introduction and then emit each option on its own exact line:
            [[NOVA_CHOICE|short option title|the complete Chinese reply NOVA should receive if selected]]
@@ -575,6 +584,10 @@ public sealed class OpenAIResponsesAgentRuntime : IAgentRuntime
                 or "click_window_point" => "PC 操作员",
             "delegate_parallel_tasks" => "多 Agent 编排器",
             "list_scheduled_tasks" or "schedule_agent_task" or "disable_scheduled_task" => "计划调度器",
+            "commerce_normalize_product_passport" => "商品档案官",
+            "commerce_assess_market_demand" => "市场适配分析师",
+            "commerce_calculate_landed_profit" => "利润分析师",
+            "commerce_build_evidence_ledger" => "市场证据官",
             _ => "工具代理"
         };
 
@@ -611,6 +624,10 @@ public sealed class OpenAIResponsesAgentRuntime : IAgentRuntime
             "list_scheduled_tasks" => "计划任务清单",
             "schedule_agent_task" => "创建计划任务",
             "disable_scheduled_task" => "停用计划任务",
+            "commerce_normalize_product_passport" => "商品身份档案",
+            "commerce_assess_market_demand" => "市场需求适配评估",
+            "commerce_calculate_landed_profit" => "落地利润计算",
+            "commerce_build_evidence_ledger" => "市场证据审计",
             _ => name
         };
 

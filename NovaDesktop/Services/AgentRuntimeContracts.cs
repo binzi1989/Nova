@@ -15,7 +15,9 @@ public sealed record AgentRunRequest(
     IReadOnlyList<AgentInputAttachment>? Attachments = null,
     string? Endpoint = null,
     int? MaxModelRoundsOverride = null,
-    int? MaxTokensPerRequest = null);
+    int? MaxTokensPerRequest = null,
+    string? AgentPackId = null,
+    IReadOnlySet<string>? AllowedToolNames = null);
 
 public sealed record AgentRuntimeEvent(
     AgentRuntimeEventKind Kind,

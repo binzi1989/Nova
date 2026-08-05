@@ -107,11 +107,20 @@ internal sealed class AgentOsBridgeHost : IDisposable
     private readonly LivingMemoryService _livingMemory;
     private readonly EvolutionLabService _evolutionLab;
     private readonly RemoteCapabilityStoreService _remoteStore;
+    private readonly AgentPackService _agentPacks = new();
+    private readonly AgentPackWorkshopService _agentWorkshop;
+    private readonly AgentCalibrationService _agentCalibrations = new();
+    private readonly KnowledgeIndexService _knowledgeIndex = new();
+    private readonly KnowledgeGraphService _knowledgeGraph = new();
     private readonly ConcurrentDictionary<string, TaskItem> _active =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _startGates =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _agentRuns =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, McpDiscoveryCandidate> _mcpDiscoveryCandidates =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _runCancellations =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _bootGate = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
@@ -126,6 +135,7 @@ internal sealed class AgentOsBridgeHost : IDisposable
         _remoteStore = new RemoteCapabilityStoreService(_mcpRegistry, _skillRegistry);
         _livingMemory = new LivingMemoryService(_snapshots, _conversations);
         _evolutionLab = new EvolutionLabService(skills: _skillRegistry);
+        _agentWorkshop = new AgentPackWorkshopService(_agentPacks);
     }
 
     public async Task<object?> ExecuteAsync(string method, JsonObject parameters)
@@ -146,8 +156,12 @@ internal sealed class AgentOsBridgeHost : IDisposable
             "get_task" => await GetTaskAsync(parameters),
             "archive_task" => await ArchiveTaskAsync(parameters),
             "restore_task" => await RestoreArchivedTaskAsync(parameters),
+            "delete_archived_task" => await DeleteArchivedTaskAsync(parameters),
             "start_task" => await StartTaskAsync(parameters),
             "run_agent" => await RunAgentAsync(parameters),
+            "run_design_session" => await RunDesignSessionAsync(parameters),
+            "cancel_task" => await CancelTaskAsync(parameters),
+            "cancel_design_session" => CancelDesignSession(parameters),
             "verify_result" => await VerifyResultAsync(parameters),
             "task_event" => await AppendEventAsync(parameters),
             "complete_task" => await CompleteTaskAsync(parameters),
@@ -158,8 +172,34 @@ internal sealed class AgentOsBridgeHost : IDisposable
             "list_store_sources" => _remoteStore.GetSources(),
             "search_capability_store" => await SearchCapabilityStoreAsync(parameters),
             "install_store_capability" => await InstallStoreCapabilityAsync(parameters),
+            "list_agent_packs" => _agentPacks.List(),
+            "get_agent_pack" => _agentPacks.Get(RequiredString(parameters, "id")),
+            "list_agent_creation_templates" => _agentWorkshop.ListTemplates(),
+            "recommend_agent_pack" => _agentWorkshop.Recommend(ParseAgentPackCreationRequest(parameters, allowIncomplete: true)),
+            "create_agent_pack" => await CreateAgentPackAsync(parameters),
+            "list_agent_calibrations" => _agentCalibrations.GetSnapshot(
+                RequiredString(parameters, "packId")),
+            "create_agent_calibration" => await CreateAgentCalibrationAsync(parameters),
+            "rollback_agent_calibration" => await _agentCalibrations.RollbackAsync(
+                RequiredString(parameters, "packId"),
+                RequiredString(parameters, "patchId")),
+            "get_agent_pack_capabilities" => await GetAgentPackCapabilitiesAsync(parameters),
+            "install_agent_pack" => await _agentPacks.InstallFromDirectoryAsync(
+                RequiredString(parameters, "sourceRoot")),
+            "set_agent_pack_enabled" => await _agentPacks.SetEnabledAsync(
+                RequiredString(parameters, "id"),
+                parameters["enabled"]?.GetValue<bool>() ?? false),
+            "remove_agent_pack" => await _agentPacks.RemoveAsync(
+                RequiredString(parameters, "id")),
+            "list_mcp_discovery_sources" => await ListMcpDiscoverySourcesAsync(parameters),
+            "preview_mcp_config" => await PreviewMcpConfigAsync(parameters),
+            "discover_mcp" => await DiscoverMcpAsync(parameters),
+            "import_discovered_mcp" => await ImportDiscoveredMcpAsync(parameters),
             "desktop_snapshot" => await DesktopSnapshotAsync(),
             "get_living_memory" => _livingMemory.GetSnapshot(),
+            "get_knowledge_state" => GetKnowledgeState(parameters),
+            "index_workspace_knowledge" => await IndexWorkspaceKnowledgeAsync(parameters),
+            "search_workspace_knowledge" => SearchWorkspaceKnowledge(parameters),
             "analyze_living_memory" => await _livingMemory.AnalyzeAsync(),
             "set_habit_state" => await SetHabitStateAsync(parameters),
             "distill_personal_skill" => await _livingMemory.DistillSkillAsync(),
@@ -296,23 +336,28 @@ internal sealed class AgentOsBridgeHost : IDisposable
         => _snapshots.LoadAll()
             .Where(item => item.IsArchived == isArchived)
             .OrderByDescending(item => item.UpdatedAt)
-            .Select(item => new
+            .Select(item =>
             {
-                id = item.TaskId,
-                item.Title,
-                description = item.Prompt,
-                item.WorkspaceRoot,
-                item.Provider,
-                item.Model,
-                state = NormalizeRecoveredState(item.State),
-                item.Progress,
-                stage = NormalizeRecoveredStage(item.State, item.Stage),
-                item.CreatedAt,
-                item.UpdatedAt,
-                item.ExecutionMode,
-                item.ExecutionSequence,
-                hasResult = !string.IsNullOrWhiteSpace(item.Draft),
-                item.IsArchived
+                _active.TryGetValue(item.TaskId, out var activeTask);
+                return new
+                {
+                    id = item.TaskId,
+                    item.Title,
+                    description = item.Prompt,
+                    item.WorkspaceRoot,
+                    item.Provider,
+                    item.Model,
+                    item.AgentPackId,
+                    state = activeTask?.State ?? NormalizeRecoveredState(item.State),
+                    progress = activeTask?.Progress ?? item.Progress,
+                    stage = activeTask?.Stage ?? NormalizeRecoveredStage(item.State, item.Stage),
+                    item.CreatedAt,
+                    item.UpdatedAt,
+                    item.ExecutionMode,
+                    executionSequence = activeTask?.ExecutionSequence ?? item.ExecutionSequence,
+                    hasResult = !string.IsNullOrWhiteSpace(item.Draft),
+                    item.IsArchived
+                };
             })
             .Cast<object>()
             .ToArray();
@@ -389,6 +434,34 @@ internal sealed class AgentOsBridgeHost : IDisposable
         return new { taskId, archived = false };
     }
 
+    private async Task<object> DeleteArchivedTaskAsync(JsonObject parameters)
+    {
+        await BootAsync();
+        var taskId = RequiredString(parameters, "taskId");
+        if (_active.ContainsKey(taskId))
+        {
+            throw new InvalidOperationException("正在运行的任务不能删除，请先停止或等待任务结束。");
+        }
+        var snapshot = _snapshots.LoadAll().FirstOrDefault(item =>
+            item.TaskId.Equals(taskId, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"Task {taskId} was not found.");
+        if (!snapshot.IsArchived)
+        {
+            throw new InvalidOperationException("只有已经归档的任务才能永久删除。");
+        }
+
+        await _conversations.DeleteAsync(taskId);
+        var journalEntries = await _journal.DeleteTaskAsync(taskId);
+        var deleted = await _snapshots.DeleteAsync(taskId);
+        return new
+        {
+            taskId,
+            deleted,
+            journalEntries,
+            retainedWorkspaceFiles = true
+        };
+    }
+
     private async Task<object> StartTaskAsync(JsonObject parameters)
     {
         await BootAsync();
@@ -440,9 +513,16 @@ internal sealed class AgentOsBridgeHost : IDisposable
             ? null
             : _snapshots.LoadAll().FirstOrDefault(item =>
                 item.TaskId.Equals(requestedTaskId, StringComparison.OrdinalIgnoreCase));
+        var agentPackId = OptionalString(parameters, "agentPackId")
+                          ?? recovered?.AgentPackId;
+        if (agentPackId is not null)
+        {
+            _ = _agentPacks.BuildRuntimeContext(agentPackId);
+        }
         var task = new TaskItem
         {
             Id = recovered?.TaskId
+                 ?? NormalizeRequestedTaskId(requestedTaskId)
                  ?? "electron-" + Guid.NewGuid().ToString("N")[..12],
             Title = recovered?.Title
                     ?? OptionalString(parameters, "title")
@@ -457,6 +537,7 @@ internal sealed class AgentOsBridgeHost : IDisposable
             Model = OptionalString(parameters, "model")
                     ?? recovered?.Model
                     ?? "gpt-5.6",
+            AgentPackId = agentPackId,
             ExecutionMode = mode,
             CreatedAt = recovered?.CreatedAt ?? DateTimeOffset.Now,
             Draft = recovered?.Draft ?? string.Empty,
@@ -572,6 +653,14 @@ internal sealed class AgentOsBridgeHost : IDisposable
             throw new InvalidOperationException(
                 $"Task {task.Id} already has an active Agent run.");
         }
+        var runCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        if (!_runCancellations.TryAdd(task.Id, runCancellation))
+        {
+            runCancellation.Dispose();
+            _agentRuns.TryRemove(task.Id, out _);
+            throw new InvalidOperationException(
+                $"Task {task.Id} already has a cancellation scope.");
+        }
         var prompt = RequiredString(parameters, "prompt");
         var apiKey = OptionalString(parameters, "apiKey") ?? string.Empty;
         var endpoint = OptionalString(parameters, "endpoint");
@@ -589,13 +678,39 @@ internal sealed class AgentOsBridgeHost : IDisposable
             StringComparison.OrdinalIgnoreCase)
             ? new OpenAIResponsesAgentRuntime()
             : new DeepSeekChatAgentRuntime();
-        var workingProfile = _livingMemory.BuildProfilePrompt();
-        var runtimePrompt = string.Join(
-            Environment.NewLine + Environment.NewLine,
-            new[] { workingProfile, conversationContext, prompt }
-                .Where(value => !string.IsNullOrWhiteSpace(value)));
         var evolutionBudget = await _evolutionLab.ReserveRuntimeBudgetAsync(
             task.WorkspaceRoot);
+        var isEvolutionRun = evolutionBudget is not null;
+        // Evolution experiments are a deliberately tiny declarative-plugin sandbox.
+        // Do not inherit the currently selected Agent Pack, calibration, personal
+        // memory or a general conversation transcript: those unrelated instructions
+        // previously diverted the model into knowledge/productivity research until
+        // its bounded rounds expired without editing SKILL.md.
+        var workingProfile = isEvolutionRun ? string.Empty : _livingMemory.BuildProfilePrompt();
+        var agentPackContext = isEvolutionRun
+            ? string.Empty
+            : _agentPacks.BuildRuntimeContext(task.AgentPackId);
+        var calibrationContext = isEvolutionRun
+            ? string.Empty
+            : _agentCalibrations.BuildRuntimeContext(
+                task.AgentPackId,
+                task.Id,
+                task.WorkspaceRoot);
+        var runtimePrompt = isEvolutionRun
+            ? prompt
+            : string.Join(
+                Environment.NewLine + Environment.NewLine,
+                new[] { agentPackContext, calibrationContext, workingProfile, conversationContext, prompt }
+                    .Where(value => !string.IsNullOrWhiteSpace(value)));
+        IReadOnlySet<string>? allowedToolNames = isEvolutionRun
+            ? new HashSet<string>(StringComparer.Ordinal)
+            {
+                "list_workspace_files",
+                "read_text_file",
+                "write_text_file",
+                "replace_text_in_file"
+            }
+            : null;
         var request = new AgentRunRequest(
             task.Id,
             runtimePrompt,
@@ -605,9 +720,12 @@ internal sealed class AgentOsBridgeHost : IDisposable
             task.Model,
             task.ExecutionMode,
             AllowParallelDelegation: evolutionBudget is null
-                                     && approvalMode.Equals(
-                                         "workspace",
-                                         StringComparison.OrdinalIgnoreCase),
+                                     && (approvalMode.Equals(
+                                             "workspace",
+                                             StringComparison.OrdinalIgnoreCase)
+                                         || approvalMode.Equals(
+                                             "orchestration",
+                                             StringComparison.OrdinalIgnoreCase)),
             // Top-level Agent runs already execute inside WorkspaceRoot and are
             // guarded by ResolvePath plus the approval policy below. Ownership
             // scopes are reserved for isolated Agent Mesh workers and must be
@@ -617,25 +735,41 @@ internal sealed class AgentOsBridgeHost : IDisposable
             Attachments: attachments,
             Endpoint: endpoint,
             MaxModelRoundsOverride: evolutionBudget?.MaxModelRounds,
-            MaxTokensPerRequest: evolutionBudget?.MaxTokensPerRequest);
+            MaxTokensPerRequest: evolutionBudget?.MaxTokensPerRequest,
+            AgentPackId: isEvolutionRun ? null : task.AgentPackId,
+            AllowedToolNames: allowedToolNames);
 
         var pendingStream = new StringBuilder();
         var lastStreamPublishAt = DateTimeOffset.MinValue;
         var validationRuns = 0;
+        // A model can request several read-only tools in parallel. Their progress
+        // callbacks all target the same task graph, supervisor lease and snapshot.
+        // Serialize that persistence boundary so a harmless observation batch
+        // cannot race on Windows and turn a successful model round into
+        // "Access to the path is denied".
+        using var runtimeEventGate = new SemaphoreSlim(1, 1);
 
         async Task PublishEventCoreAsync(AgentRuntimeEvent runtimeEvent)
         {
-            await ApplyRuntimeEventAsync(task, runtimeEvent);
-            await _publish("agent_event", new
+            await runtimeEventGate.WaitAsync(runCancellation.Token);
+            try
             {
-                taskId = task.Id,
-                kind = runtimeEvent.Kind.ToString().ToLowerInvariant(),
-                runtimeEvent.Agent,
-                runtimeEvent.Action,
-                runtimeEvent.Detail,
-                runtimeEvent.Progress,
-                runtimeEvent.ActiveUnits
-            });
+                await ApplyRuntimeEventAsync(task, runtimeEvent);
+                await _publish("agent_event", new
+                {
+                    taskId = task.Id,
+                    kind = runtimeEvent.Kind.ToString().ToLowerInvariant(),
+                    runtimeEvent.Agent,
+                    runtimeEvent.Action,
+                    runtimeEvent.Detail,
+                    runtimeEvent.Progress,
+                    runtimeEvent.ActiveUnits
+                });
+            }
+            finally
+            {
+                runtimeEventGate.Release();
+            }
         }
 
         async Task FlushPendingStreamAsync()
@@ -686,7 +820,8 @@ internal sealed class AgentOsBridgeHost : IDisposable
             },
             async approval =>
             {
-                var workspaceApproved = approvalMode.Equals(
+                var workspaceApproved = isEvolutionRun
+                                        || approvalMode.Equals(
                     "workspace",
                     StringComparison.OrdinalIgnoreCase)
                     || approvalMode.Equals(
@@ -711,9 +846,14 @@ internal sealed class AgentOsBridgeHost : IDisposable
                     AgentExecutionMode.Goal or AgentExecutionMode.Autopilot)
                     && approval.ToolName is
                         "delegate_parallel_tasks" or "auto_delegate_parallel_tasks";
+                var orchestrationDelegation = approvalMode.Equals(
+                                                  "orchestration",
+                                                  StringComparison.OrdinalIgnoreCase)
+                                              && approvedDelegation;
                 var allowed = (workspaceApproved
                                && (lowRiskWorkspaceAction || approvedDelegation))
-                              || (desktopApproved && boundedDesktopAction);
+                              || (desktopApproved && boundedDesktopAction)
+                              || orchestrationDelegation;
 
                 await _publish("agent_event", new
                 {
@@ -729,7 +869,7 @@ internal sealed class AgentOsBridgeHost : IDisposable
                 });
                 return allowed;
             },
-            CancellationToken.None);
+            runCancellation.Token);
         await FlushPendingStreamAsync();
         return new
         {
@@ -743,6 +883,158 @@ internal sealed class AgentOsBridgeHost : IDisposable
             requiresWorkspaceMutation =
                 EngineeringTaskRouter.RequiresWorkspaceMutation(prompt)
         };
+    }
+
+    private async Task<object> RunDesignSessionAsync(JsonObject parameters)
+    {
+        var sessionId = RequiredString(parameters, "sessionId");
+        var runKey = $"design:{sessionId}";
+        if (!_agentRuns.TryAdd(runKey, 0))
+        {
+            throw new InvalidOperationException(
+                $"Design session {sessionId} already has an active Agent run.");
+        }
+
+        var runCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        if (!_runCancellations.TryAdd(runKey, runCancellation))
+        {
+            runCancellation.Dispose();
+            _agentRuns.TryRemove(runKey, out _);
+            throw new InvalidOperationException(
+                $"Design session {sessionId} already has a cancellation scope.");
+        }
+
+        try
+        {
+            var prompt = RequiredString(parameters, "prompt");
+            var workspaceRoot = RequiredString(parameters, "workspaceRoot");
+            var provider = RequiredString(parameters, "provider");
+            var model = RequiredString(parameters, "model");
+            var apiKey = OptionalString(parameters, "apiKey") ?? string.Empty;
+            var endpoint = OptionalString(parameters, "endpoint");
+            var allowParallelDelegation =
+                parameters["allowParallelDelegation"]?.GetValue<bool>() ?? true;
+            var maxTokensPerRequest =
+                parameters["maxTokensPerRequest"]?.GetValue<int?>();
+            Directory.CreateDirectory(workspaceRoot);
+
+            IAgentRuntime runtime = provider.Equals(
+                "openai",
+                StringComparison.OrdinalIgnoreCase)
+                ? new OpenAIResponsesAgentRuntime()
+                : new DeepSeekChatAgentRuntime();
+            var request = new AgentRunRequest(
+                runKey,
+                prompt,
+                workspaceRoot,
+                apiKey,
+                provider,
+                model,
+                AgentExecutionMode.Goal,
+                AllowParallelDelegation: allowParallelDelegation,
+                AllowedWriteScopes: null,
+                Attachments: [],
+                Endpoint: endpoint,
+                MaxTokensPerRequest: maxTokensPerRequest,
+                AgentPackId: null);
+
+            var stageOutputs = new List<object>();
+            var stageOutputGate = new object();
+
+            async Task PublishDesignEventAsync(AgentRuntimeEvent runtimeEvent)
+            {
+                // Design sessions only authorize the two read-only delegation tools below.
+                // Do not depend on a localized worker name here: runtimes and providers may
+                // report "子 Agent 1", the declared role name, or the council itself. Losing
+                // one of these completed outputs makes an otherwise successful council run
+                // impossible to recover when the final JSON is malformed.
+                if (runtimeEvent.Kind == AgentRuntimeEventKind.ToolCompleted
+                    && !string.IsNullOrWhiteSpace(runtimeEvent.Detail))
+                {
+                    lock (stageOutputGate)
+                    {
+                        if (stageOutputs.Count < 24)
+                        {
+                            stageOutputs.Add(new
+                            {
+                                runtimeEvent.Agent,
+                                runtimeEvent.Action,
+                                runtimeEvent.Detail
+                            });
+                        }
+                    }
+                }
+                if (runtimeEvent.Kind == AgentRuntimeEventKind.TextDelta)
+                {
+                    return;
+                }
+                await _publish("design_event", new
+                {
+                    sessionId,
+                    kind = runtimeEvent.Kind.ToString().ToLowerInvariant(),
+                    runtimeEvent.Agent,
+                    runtimeEvent.Action,
+                    runtimeEvent.Detail,
+                    runtimeEvent.Progress,
+                    runtimeEvent.ActiveUnits
+                });
+            }
+
+            var result = await runtime.RunAsync(
+                request,
+                PublishDesignEventAsync,
+                async approval =>
+                {
+                    var allowed = approval.ToolName is
+                        "delegate_parallel_tasks" or "auto_delegate_parallel_tasks";
+                    await _publish("design_event", new
+                    {
+                        sessionId,
+                        kind = "message",
+                        agent = "权限管家",
+                        action = allowed ? "只读编排已授权" : "设计会话拒绝外部操作",
+                        detail = allowed
+                            ? "仅允许本轮真实子 Agent 委派；不会创建任务或修改用户工程"
+                            : $"{approval.Title} 未被设计会话授权",
+                        progress = 8,
+                        activeUnits = 1
+                    });
+                    return allowed;
+                },
+                runCancellation.Token);
+
+            return new
+            {
+                sessionId,
+                result.ResponseId,
+                output = result.FinalText,
+                result.ToolCalls,
+                result.Provider,
+                result.Model,
+                stageOutputs
+            };
+        }
+        finally
+        {
+            _agentRuns.TryRemove(runKey, out _);
+            if (_runCancellations.TryRemove(runKey, out var cancellation))
+            {
+                cancellation.Dispose();
+            }
+        }
+    }
+
+    private object CancelDesignSession(JsonObject parameters)
+    {
+        var sessionId = RequiredString(parameters, "sessionId");
+        var runKey = $"design:{sessionId}";
+        var cancelled = false;
+        if (_runCancellations.TryGetValue(runKey, out var cancellation))
+        {
+            cancellation.Cancel();
+            cancelled = true;
+        }
+        return new { sessionId, cancelled };
     }
 
     private string BuildConversationContext(
@@ -847,11 +1139,14 @@ internal sealed class AgentOsBridgeHost : IDisposable
             MaxModelRoundsOverride: 3,
             MaxTokensPerRequest: 12_000);
 
+        var cancellationToken = _runCancellations.TryGetValue(task.Id, out var runCancellation)
+            ? runCancellation.Token
+            : _lifetime.Token;
         var result = await runtime.RunAsync(
             request,
             _ => Task.CompletedTask,
             _ => Task.FromResult(false),
-            CancellationToken.None);
+            cancellationToken);
         var verdict = IndependentVerificationCouncilService.Parse(
             provider,
             model,
@@ -906,11 +1201,21 @@ internal sealed class AgentOsBridgeHost : IDisposable
                         $"Attachment {info.Name} no longer exists.",
                         localPath);
                 }
-                var kind = OptionalString(value, "kind")?.Equals(
+                var requestedKind = OptionalString(value, "kind");
+                var documentExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ".pdf", ".doc", ".docx", ".docm", ".dotx", ".dotm"
+                };
+                var kind = requestedKind?.Equals(
                     "image",
                     StringComparison.OrdinalIgnoreCase) == true
                     ? AgentAttachmentKind.Image
-                    : AgentAttachmentKind.Text;
+                    : requestedKind?.Equals(
+                        "document",
+                        StringComparison.OrdinalIgnoreCase) == true
+                      || documentExtensions.Contains(info.Extension)
+                        ? AgentAttachmentKind.Document
+                        : AgentAttachmentKind.Text;
                 var mediaType = OptionalString(value, "mime")
                                 ?? kind switch
                                 {
@@ -925,6 +1230,18 @@ internal sealed class AgentOsBridgeHost : IDisposable
                                             StringComparison.OrdinalIgnoreCase)
                                         => "image/webp",
                                     AgentAttachmentKind.Image => "image/jpeg",
+                                    AgentAttachmentKind.Document
+                                        when info.Extension.Equals(
+                                            ".pdf",
+                                            StringComparison.OrdinalIgnoreCase)
+                                        => "application/pdf",
+                                    AgentAttachmentKind.Document
+                                        when info.Extension.Equals(
+                                            ".doc",
+                                            StringComparison.OrdinalIgnoreCase)
+                                        => "application/msword",
+                                    AgentAttachmentKind.Document
+                                        => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                                     _ => "text/plain"
                                 };
                 return new AgentInputAttachment(
@@ -941,13 +1258,31 @@ internal sealed class AgentOsBridgeHost : IDisposable
 
     private async Task<object> CompleteTaskAsync(JsonObject parameters)
     {
-        var task = GetActiveTask(RequiredString(parameters, "taskId"));
+        var taskId = RequiredString(parameters, "taskId");
+        if (!_active.TryGetValue(taskId, out var task))
+        {
+            var restored = _snapshots.LoadAll().FirstOrDefault(item =>
+                item.TaskId.Equals(taskId, StringComparison.OrdinalIgnoreCase));
+            if (restored is not null
+                && restored.State is TaskState.Completed
+                    or TaskState.Failed
+                    or TaskState.Paused
+                    or TaskState.Cancelled)
+            {
+                // complete_task is intentionally idempotent. A renderer retry after
+                // a timeout must not turn an already committed result into a lease
+                // conflict or force the model to run again.
+                return ProjectSnapshot(restored);
+            }
+            throw new InvalidOperationException($"Task {taskId} is not active.");
+        }
         var succeeded = parameters["succeeded"]?.GetValue<bool>() ?? true;
         var outcome = OptionalString(parameters, "outcome")?.ToLowerInvariant()
                       ?? (succeeded ? "completed" : "failed");
         var partial = outcome == "partial";
         var detail = OptionalString(parameters, "detail")
                      ?? (succeeded ? "Task completed" : "Task failed");
+        var leaseReleased = false;
         try
         {
             if (succeeded && !partial)
@@ -968,6 +1303,7 @@ internal sealed class AgentOsBridgeHost : IDisposable
                     : Math.Max(task.Progress, 1);
             task.Stage = detail;
             task.Draft = OptionalString(parameters, "draft") ?? task.Draft;
+            task.AgentPackId = OptionalString(parameters, "agentPackId") ?? task.AgentPackId;
             var committed = await _kernel.PublishTaskEventAsync(
                 "task",
                 "NOVA Electron",
@@ -992,14 +1328,60 @@ internal sealed class AgentOsBridgeHost : IDisposable
                 await _conversations.AppendAsync(task.Id, "assistant", task.Draft);
             }
             await _supervisor.ReleaseAsync(task, executionSequence: committed.Sequence);
+            leaseReleased = true;
             return ProjectTask(task);
         }
         finally
         {
+            if (!leaseReleased)
+            {
+                // Preserve the model result and release the host lease even when a
+                // secondary ledger/journal write fails during completion.
+                task.State = task.State == TaskState.Running
+                    ? TaskState.Paused
+                    : task.State;
+                task.Stage = string.IsNullOrWhiteSpace(task.Stage)
+                    ? "结果已保留；完成结算中断，可安全继续"
+                    : task.Stage;
+                try
+                {
+                    await _snapshots.SaveAsync(task);
+                }
+                catch
+                {
+                    // Best-effort recovery snapshot; preserve the original error.
+                }
+                try
+                {
+                    await _supervisor.ReleaseAsync(
+                        task,
+                        executionSequence: task.ExecutionSequence);
+                }
+                catch
+                {
+                    // ReleaseAsync always closes the local file handle in finally.
+                }
+            }
             _agentRuns.TryRemove(task.Id, out _);
+            if (_runCancellations.TryRemove(task.Id, out var runCancellation))
+            {
+                runCancellation.Dispose();
+            }
             _active.TryRemove(task.Id, out _);
             _governor.EndTask(task.Id);
         }
+    }
+
+    private Task<object> CancelTaskAsync(JsonObject parameters)
+    {
+        var taskId = RequiredString(parameters, "taskId");
+        var cancelled = false;
+        if (_runCancellations.TryGetValue(taskId, out var cancellation))
+        {
+            cancellation.Cancel();
+            cancelled = true;
+        }
+        return Task.FromResult<object>(new { taskId, cancelled });
     }
 
     private async Task<object> ListCapabilitiesAsync(JsonObject parameters)
@@ -1052,6 +1434,333 @@ internal sealed class AgentOsBridgeHost : IDisposable
         };
     }
 
+    private async Task<object> GetAgentPackCapabilitiesAsync(JsonObject parameters)
+    {
+        await BootAsync();
+        var pack = _agentPacks.Get(RequiredString(parameters, "id"));
+        var workspaceRoot = OptionalString(parameters, "workspaceRoot")
+                            ?? Environment.CurrentDirectory;
+        var requirements = pack.CapabilityRequirements?.Items ?? [];
+        var servers = _mcpRegistry.GetServers();
+        var skills = _skillRegistry.GetSkills();
+        var marketplace = new CapabilityMarketplaceService(
+            _mcpRegistry,
+            _skillRegistry,
+            workspaceRoot).GetCatalog();
+
+        var items = requirements.Select(requirement =>
+        {
+            var matchIds = requirement.MatchIds;
+            var server = requirement.Kind == "mcp"
+                ? servers.FirstOrDefault(candidate => CapabilityMatches(
+                    candidate.Name,
+                    matchIds))
+                : null;
+            var skill = requirement.Kind == "skill"
+                ? skills.FirstOrDefault(candidate =>
+                    CapabilityMatches(candidate.Id, matchIds)
+                    || CapabilityMatches(candidate.Name, matchIds))
+                : null;
+            var catalog = marketplace.FirstOrDefault(candidate =>
+                candidate.Kind.ToString().Equals(requirement.Kind, StringComparison.OrdinalIgnoreCase)
+                && ((!string.IsNullOrWhiteSpace(requirement.CatalogId)
+                     && candidate.Id.Equals(requirement.CatalogId, StringComparison.OrdinalIgnoreCase))
+                    || CapabilityMatches(candidate.Id, matchIds)));
+            var enabled = server?.Enabled == true || skill?.Enabled == true;
+            var registered = server is not null || skill is not null;
+            var state = enabled
+                ? "ready"
+                : registered
+                    ? "registered-disabled"
+                    : catalog is not null
+                        ? "available"
+                        : "missing";
+            return new
+            {
+                requirement.Id,
+                requirement.Kind,
+                requirement.Name,
+                requirement.Reason,
+                requirement.Required,
+                requirement.MatchIds,
+                state,
+                matchedId = server?.Name ?? skill?.Id,
+                matchedName = server?.Name ?? skill?.Name,
+                catalogId = catalog?.Id ?? requirement.CatalogId,
+                catalogName = catalog?.Name,
+                action = state switch
+                {
+                    "ready" => "none",
+                    "registered-disabled" => "enable",
+                    "available" => "load",
+                    _ when requirement.Kind == "mcp" => "scan",
+                    _ => "store"
+                }
+            };
+        }).ToArray();
+        var requiredItems = items.Where(item => item.Required).ToArray();
+        return new
+        {
+            packId = pack.Summary.Id,
+            version = pack.CapabilityRequirements?.Version ?? "1.0",
+            ready = requiredItems.All(item => item.state == "ready"),
+            readyCount = items.Count(item => item.state == "ready"),
+            requiredCount = requiredItems.Length,
+            requiredReadyCount = requiredItems.Count(item => item.state == "ready"),
+            items
+        };
+    }
+
+    private Task<AgentPackCreationResult> CreateAgentPackAsync(JsonObject parameters)
+    {
+        return _agentWorkshop.CreateAsync(ParseAgentPackCreationRequest(parameters));
+    }
+
+    private static AgentPackCreationRequest ParseAgentPackCreationRequest(
+        JsonObject parameters,
+        bool allowIncomplete = false)
+    {
+        string Value(string name, string fallback) => allowIncomplete
+            ? OptionalString(parameters, name) ?? fallback
+            : RequiredString(parameters, name);
+        return new AgentPackCreationRequest(
+            Value("id", "nova.user.preview-agent"),
+            Value("name", "这个专业 Agent"),
+            Value("category", "当前行业"),
+            Value("description", "根据前面步骤生成的专业 Agent。"),
+            Value("objective", "完成用户确认的最终目标"),
+            OptionalString(parameters, "scenarioProfile") ?? "research",
+            OptionalString(parameters, "autonomyLevel") ?? "assist",
+            OptionalString(parameters, "lifecycle") ?? "single-run",
+            OptionalString(parameters, "collaborationMode") ?? "independent",
+            OptionalString(parameters, "deliveryMode") ?? "document",
+            OptionalString(parameters, "decisionStyle") ?? "balanced",
+            Value("primaryArtifact", "结果交付.md"),
+            StringValues(parameters["requiredInputs"] as JsonArray),
+            StringValues(parameters["recommendedInputs"] as JsonArray),
+            StringValues(parameters["starterPrompts"] as JsonArray),
+            ParseAgentWorkshopOrchestration(parameters["orchestration"] as JsonObject));
+    }
+
+    private static AgentWorkshopOrchestrationDraft? ParseAgentWorkshopOrchestration(
+        JsonObject? orchestration)
+    {
+        if (orchestration is null)
+        {
+            return null;
+        }
+        var roles = (orchestration["roles"] as JsonArray ?? [])
+            .OfType<JsonObject>()
+            .Select(role => new AgentWorkshopRoleDraft(
+                OptionalString(role, "id") ?? string.Empty,
+                OptionalString(role, "name") ?? string.Empty,
+                OptionalString(role, "responsibility") ?? string.Empty,
+                StringValues(role["deliverables"] as JsonArray)))
+            .ToArray();
+        var workflow = (orchestration["workflow"] as JsonArray ?? [])
+            .OfType<JsonObject>()
+            .Select((step, index) => new AgentWorkshopStepDraft(
+                step["order"]?.GetValue<int>() ?? index + 1,
+                OptionalString(step, "title") ?? string.Empty,
+                OptionalString(step, "owner") ?? string.Empty,
+                OptionalString(step, "output") ?? string.Empty,
+                StringValues(step["acceptance"] as JsonArray)))
+            .ToArray();
+        return new AgentWorkshopOrchestrationDraft(
+            OptionalString(orchestration, "summary") ?? string.Empty,
+            StringValues(orchestration["designRationale"] as JsonArray),
+            roles,
+            workflow,
+            StringValues(orchestration["requiredInputs"] as JsonArray),
+            StringValues(orchestration["recommendedInputs"] as JsonArray),
+            StringValues(orchestration["starterPrompts"] as JsonArray),
+            StringValues(orchestration["risks"] as JsonArray),
+            OptionalString(orchestration, "reviewVerdict") ?? string.Empty,
+            OptionalString(orchestration, "modelProvider") ?? string.Empty,
+            OptionalString(orchestration, "model") ?? string.Empty);
+    }
+
+    private Task<AgentCalibrationSnapshot> CreateAgentCalibrationAsync(JsonObject parameters)
+    {
+        var packId = RequiredString(parameters, "packId");
+        _ = _agentPacks.Get(packId);
+        return _agentCalibrations.CreateAsync(new CreateAgentCalibrationRequest(
+            packId,
+            RequiredString(parameters, "scope"),
+            RequiredString(parameters, "category"),
+            RequiredString(parameters, "instruction"),
+            OptionalString(parameters, "taskId"),
+            OptionalString(parameters, "workspaceRoot"),
+            OptionalString(parameters, "sourceTitle"),
+            OptionalString(parameters, "sourcePath")));
+    }
+
+    private Task<object> ListMcpDiscoverySourcesAsync(JsonObject parameters)
+    {
+        var workspaceRoot = OptionalString(parameters, "workspaceRoot")
+                            ?? Environment.CurrentDirectory;
+        var discovery = new McpDiscoveryService(workspaceRoot);
+        var sources = discovery.GetAvailableDefaultSources();
+        return Task.FromResult<object>(new
+        {
+            sources = sources.Select(source => new
+            {
+                source.Product,
+                source.Path,
+                source.Format
+            }).ToArray()
+        });
+    }
+
+    private async Task<object> DiscoverMcpAsync(JsonObject parameters)
+    {
+        await BootAsync();
+        var workspaceRoot = OptionalString(parameters, "workspaceRoot")
+                            ?? Environment.CurrentDirectory;
+        var discovery = new McpDiscoveryService(workspaceRoot);
+        var sources = discovery.GetAvailableDefaultSources();
+        var result = await discovery.DiscoverAsync(
+            sources,
+            _mcpRegistry.GetServers(),
+            CancellationToken.None);
+        _mcpDiscoveryCandidates.Clear();
+        foreach (var candidate in result.Candidates)
+        {
+            _mcpDiscoveryCandidates[candidate.Id] = candidate;
+        }
+        return new
+        {
+            candidates = result.Candidates.Select(candidate => new
+            {
+                candidate.Id,
+                candidate.Name,
+                candidate.SourceProduct,
+                candidate.SourcePath,
+                candidate.IsCompatible,
+                candidate.IsAlreadyRegistered,
+                candidate.CanImport,
+                candidate.MayAcquireSoftware,
+                candidate.OmittedSecretCount,
+                candidate.RiskLabel,
+                candidate.Summary,
+                candidate.Notes
+            }).ToArray(),
+            result.ScannedPaths,
+            result.Warnings
+        };
+    }
+
+    private async Task<object> PreviewMcpConfigAsync(JsonObject parameters)
+    {
+        await BootAsync();
+        var workspaceRoot = OptionalString(parameters, "workspaceRoot")
+                            ?? Environment.CurrentDirectory;
+        var discovery = new McpDiscoveryService(workspaceRoot);
+        var candidates = discovery.PreviewConfiguration(
+            RequiredString(parameters, "configuration"),
+            _mcpRegistry.GetServers());
+        var authorizationEnvironment = OptionalString(parameters, "authorizationEnvironment");
+        if (!string.IsNullOrWhiteSpace(authorizationEnvironment))
+        {
+            authorizationEnvironment = authorizationEnvironment.Trim();
+            if (!System.Text.RegularExpressions.Regex.IsMatch(
+                    authorizationEnvironment,
+                    "^[A-Za-z_][A-Za-z0-9_]{0,127}$",
+                    System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+            {
+                throw new InvalidOperationException(
+                    "Authorization environment name must use letters, numbers, and underscores, and cannot start with a number.");
+            }
+            candidates = candidates.Select(candidate =>
+            {
+                if (candidate.Registration.Transport != "http")
+                {
+                    return candidate;
+                }
+                var headers = new Dictionary<string, string>(
+                    candidate.Registration.HttpHeaders
+                    ?? new Dictionary<string, string>(),
+                    StringComparer.OrdinalIgnoreCase)
+                {
+                    ["Authorization"] = authorizationEnvironment
+                };
+                return candidate with
+                {
+                    Registration = candidate.Registration with { HttpHeaders = headers }
+                };
+            }).ToArray();
+        }
+        _mcpDiscoveryCandidates.Clear();
+        foreach (var candidate in candidates)
+        {
+            _mcpDiscoveryCandidates[candidate.Id] = candidate;
+        }
+        return new
+        {
+            candidates = candidates.Select(candidate => new
+            {
+                candidate.Id,
+                candidate.Name,
+                candidate.SourceProduct,
+                candidate.SourcePath,
+                candidate.IsCompatible,
+                candidate.IsAlreadyRegistered,
+                candidate.CanImport,
+                candidate.MayAcquireSoftware,
+                candidate.OmittedSecretCount,
+                candidate.RiskLabel,
+                candidate.Summary,
+                candidate.Notes
+            }).ToArray(),
+            scannedPaths = Array.Empty<string>(),
+            warnings = Array.Empty<string>()
+        };
+    }
+
+    private async Task<object> ImportDiscoveredMcpAsync(JsonObject parameters)
+    {
+        var ids = parameters["candidateIds"]?.AsArray()
+            .Select(node => node?.GetValue<string>()?.Trim())
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(32)
+            .Select(value => value!)
+            .ToArray() ?? [];
+        if (ids.Length == 0)
+        {
+            throw new InvalidOperationException("Select at least one discovered MCP connection.");
+        }
+        var imported = new List<string>();
+        var skipped = new List<string>();
+        foreach (var id in ids)
+        {
+            if (!_mcpDiscoveryCandidates.TryGetValue(id, out var candidate)
+                || !candidate.CanImport)
+            {
+                skipped.Add(id);
+                continue;
+            }
+            await _mcpRegistry.UpsertAsync(
+                candidate.Registration with { Enabled = false },
+                CancellationToken.None);
+            imported.Add(candidate.Name);
+            _mcpDiscoveryCandidates.TryRemove(id, out _);
+        }
+        return new
+        {
+            imported,
+            skipped,
+            enabled = false
+        };
+    }
+
+    private static bool CapabilityMatches(
+        string value,
+        IReadOnlyList<string> matchIds)
+        => matchIds.Any(match =>
+            value.Equals(match, StringComparison.OrdinalIgnoreCase)
+            || value.Contains(match, StringComparison.OrdinalIgnoreCase));
+
     private async Task<object> SetMcpEnabledAsync(JsonObject parameters)
     {
         var name = RequiredString(parameters, "name");
@@ -1085,7 +1794,7 @@ internal sealed class AgentOsBridgeHost : IDisposable
         if (item.McpRegistration is not null)
         {
             await _mcpRegistry.UpsertAsync(
-                item.McpRegistration with { Enabled = true },
+                item.McpRegistration with { Enabled = false },
                 CancellationToken.None);
         }
         else if (item.SkillDefinition is not null)
@@ -1110,7 +1819,7 @@ internal sealed class AgentOsBridgeHost : IDisposable
             item.Id,
             item.Name,
             installed = true,
-            enabled = true
+            enabled = item.McpRegistration is null
         };
     }
 
@@ -1199,6 +1908,7 @@ internal sealed class AgentOsBridgeHost : IDisposable
             task.WorkspaceRoot,
             task.Provider,
             task.Model,
+            task.AgentPackId,
             task.State,
             task.Progress,
             task.Stage,
@@ -1217,6 +1927,7 @@ internal sealed class AgentOsBridgeHost : IDisposable
             snapshot.WorkspaceRoot,
             snapshot.Provider,
             snapshot.Model,
+            snapshot.AgentPackId,
             state = NormalizeRecoveredState(snapshot.State),
             snapshot.Progress,
             stage = NormalizeRecoveredStage(snapshot.State, snapshot.Stage),
@@ -1236,6 +1947,7 @@ internal sealed class AgentOsBridgeHost : IDisposable
             WorkspaceRoot = snapshot.WorkspaceRoot,
             Provider = snapshot.Provider,
             Model = snapshot.Model,
+            AgentPackId = snapshot.AgentPackId,
             ExecutionMode = snapshot.ExecutionMode,
             State = snapshot.State,
             Progress = snapshot.Progress,
@@ -1246,6 +1958,73 @@ internal sealed class AgentOsBridgeHost : IDisposable
             IsArchived = snapshot.IsArchived,
             ExecutionSequence = snapshot.ExecutionSequence
         };
+
+    private object GetKnowledgeState(JsonObject parameters)
+    {
+        var workspaceRoot = OptionalString(parameters, "workspaceRoot");
+        var snapshot = _knowledgeIndex.GetSnapshot();
+        var documents = _knowledgeIndex.GetDocuments(workspaceRoot);
+        var graph = _knowledgeGraph.GetSnapshot();
+        return new
+        {
+            workspaceRoot,
+            indexPath = _knowledgeIndex.IndexPath,
+            updatedAt = snapshot.UpdatedAt,
+            count = documents.Count,
+            chunks = documents.Sum(document => document.ChunkCount),
+            bytes = documents.Sum(document => document.SizeBytes),
+            documents = documents.Take(200).ToArray(),
+            graph = new
+            {
+                graphPath = _knowledgeGraph.GraphPath,
+                graph.UpdatedAt,
+                nodeCount = graph.Nodes.Count,
+                edgeCount = graph.Edges.Count,
+                nodes = graph.Nodes
+                    .OrderByDescending(node => node.Weight)
+                    .Take(24)
+                    .ToArray()
+            }
+        };
+    }
+
+    private async Task<object> IndexWorkspaceKnowledgeAsync(JsonObject parameters)
+    {
+        var workspaceRoot = RequiredString(parameters, "workspaceRoot");
+        var summary = await _knowledgeIndex.IndexWorkspaceAsync(
+            workspaceRoot,
+            _lifetime.Token);
+        var graph = await _knowledgeGraph.SynchronizeAsync(
+            _snapshots.LoadAll(),
+            _skillRegistry.GetSkills(),
+            _mcpRegistry.GetServers(),
+            _schedules.GetSchedules(),
+            _lifetime.Token,
+            _knowledgeIndex.GetDocuments(workspaceRoot));
+        return new
+        {
+            summary,
+            graph = new
+            {
+                graph.UpdatedAt,
+                nodeCount = graph.Nodes.Count,
+                edgeCount = graph.Edges.Count
+            }
+        };
+    }
+
+    private object SearchWorkspaceKnowledge(JsonObject parameters)
+    {
+        var workspaceRoot = OptionalString(parameters, "workspaceRoot");
+        var query = RequiredString(parameters, "query");
+        var maximumResults = Math.Clamp(parameters["maximumResults"]?.GetValue<int>() ?? 12, 1, 50);
+        return new
+        {
+            query,
+            workspaceRoot,
+            results = _knowledgeIndex.Search(query, workspaceRoot, maximumResults)
+        };
+    }
 
     private TaskItem GetActiveTask(string taskId)
         => _active.TryGetValue(taskId, out var task)
@@ -1261,6 +2040,32 @@ internal sealed class AgentOsBridgeHost : IDisposable
     {
         var value = parameters[name]?.GetValue<string>()?.Trim();
         return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
+    private static IReadOnlyList<string> StringValues(JsonArray? values)
+        => values is null
+            ? []
+            : values
+                .Select(value => value?.GetValue<string>()?.Trim())
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Take(16)
+                .Select(value => value!)
+                .ToArray();
+
+    private static string? NormalizeRequestedTaskId(string? taskId)
+    {
+        if (string.IsNullOrWhiteSpace(taskId))
+        {
+            return null;
+        }
+        var normalized = taskId.Trim();
+        if (normalized.Length > 96
+            || normalized.Any(character =>
+                !char.IsAsciiLetterOrDigit(character) && character is not '-' and not '_'))
+        {
+            throw new InvalidOperationException("Task ID contains unsupported characters.");
+        }
+        return normalized;
     }
 
     private static string CreateTitle(string prompt)
@@ -1279,6 +2084,8 @@ internal sealed class AgentOsBridgeHost : IDisposable
         => method is
             "start_task"
             or "run_agent"
+            or "run_design_session"
+            or "cancel_design_session"
             or "verify_result"
             or "task_event"
             or "complete_task"
@@ -1297,6 +2104,12 @@ internal sealed class AgentOsBridgeHost : IDisposable
     public void Dispose()
     {
         _lifetime.Cancel();
+        foreach (var cancellation in _runCancellations.Values)
+        {
+            cancellation.Cancel();
+            cancellation.Dispose();
+        }
+        _runCancellations.Clear();
         _supervisor.Dispose();
         _lifetime.Dispose();
     }

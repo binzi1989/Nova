@@ -1,0 +1,33 @@
+{
+  "workflowVersion": "1.0",
+  "id": "replace-entry-workflow",
+  "name": "行业入口工作流",
+  "executionMode": "goal",
+  "resultContract": "delivery-templates/result.md",
+  "steps": [
+    {
+      "id": "freeze-brief",
+      "agent": "任务指挥官",
+      "title": "确认目标、事实、约束和未知项",
+      "dependsOn": [],
+      "outputs": ["mission-brief.json"],
+      "acceptance": ["事实、推断和未知项已经分离"]
+    },
+    {
+      "id": "industry-work",
+      "agent": "行业分析员",
+      "title": "形成可执行的专业结果",
+      "dependsOn": ["freeze-brief"],
+      "outputs": ["analysis.md"],
+      "acceptance": ["关键结论具有证据或明确条件"]
+    },
+    {
+      "id": "proof-of-done",
+      "agent": "交付审计员",
+      "title": "验证并组装最终交付",
+      "dependsOn": ["industry-work"],
+      "outputs": ["result.md", "proof-of-done.json"],
+      "acceptance": ["交付物存在且能够被用户直接检查"]
+    }
+  ]
+}

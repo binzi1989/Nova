@@ -3,6 +3,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Xml.Linq;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 using Nova.Core;
 using NovaDesktop.Models;
 using NovaDesktop.Services;
@@ -41,6 +44,69 @@ var runtimeEvidencePath = Path.Combine(
     "nova-runtime-evidence-" + Guid.NewGuid().ToString("N") + ".jsonl");
 var runtimeEvidence = new EngineeringEvidenceLedgerService(runtimeEvidencePath);
 
+static JsonObject DemandSignal(
+    string dimension,
+    decimal score,
+    decimal confidence,
+    string evidenceStatus,
+    string rationale)
+    => new()
+    {
+        ["dimension"] = dimension,
+        ["score"] = score,
+        ["confidence"] = confidence,
+        ["evidence_status"] = evidenceStatus,
+        ["rationale"] = rationale,
+        ["source_refs"] = new JsonArray("user://smoke-fixture")
+    };
+
+static byte[] CreateMinimalPdf(string text)
+{
+    var safeText = text.Replace("\\", "\\\\", StringComparison.Ordinal)
+        .Replace("(", "\\(", StringComparison.Ordinal)
+        .Replace(")", "\\)", StringComparison.Ordinal);
+    var contentStream = $"BT /F1 16 Tf 72 720 Td ({safeText}) Tj ET";
+    var objects = new[]
+    {
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        $"<< /Length {Encoding.ASCII.GetByteCount(contentStream)} >>\nstream\n{contentStream}\nendstream",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+    };
+    using var stream = new MemoryStream();
+    using var writer = new StreamWriter(stream, Encoding.ASCII, leaveOpen: true)
+    {
+        NewLine = "\n"
+    };
+    writer.WriteLine("%PDF-1.4");
+    writer.Flush();
+    var offsets = new List<long> { 0 };
+    for (var index = 0; index < objects.Length; index++)
+    {
+        offsets.Add(stream.Position);
+        writer.WriteLine($"{index + 1} 0 obj");
+        writer.WriteLine(objects[index]);
+        writer.WriteLine("endobj");
+        writer.Flush();
+    }
+    var xrefOffset = stream.Position;
+    writer.WriteLine("xref");
+    writer.WriteLine($"0 {objects.Length + 1}");
+    writer.WriteLine("0000000000 65535 f ");
+    foreach (var offset in offsets.Skip(1))
+    {
+        writer.WriteLine($"{offset:0000000000} 00000 n ");
+    }
+    writer.WriteLine("trailer");
+    writer.WriteLine($"<< /Size {objects.Length + 1} /Root 1 0 R >>");
+    writer.WriteLine("startxref");
+    writer.WriteLine(xrefOffset);
+    writer.WriteLine("%%EOF");
+    writer.Flush();
+    return stream.ToArray();
+}
+
 await CheckAsync("workspace list/read/search", async () =>
 {
     var host = new WorkspaceToolHost(@"D:\Agent");
@@ -76,6 +142,343 @@ await CheckAsync("workspace path containment", async () =>
     }
     catch (InvalidOperationException exception) when (exception.Message.Contains("escapes", StringComparison.OrdinalIgnoreCase))
     {
+    }
+});
+
+await CheckAsync("cross-border commerce deterministic tools", async () =>
+{
+    var genericHost = new WorkspaceToolHost(@"D:\Agent");
+    Expect(
+        !genericHost.Definitions.Any(item =>
+            item["name"]?.GetValue<string>()?.StartsWith(
+                "commerce_",
+                StringComparison.Ordinal) == true),
+        "Commerce tools leaked into the generic NOVA tool surface.");
+
+    var host = new WorkspaceToolHost(
+        @"D:\Agent",
+        agentPackId: CrossBorderCommerceToolService.PackId);
+    Expect(
+        host.Definitions.Count(item =>
+            item["name"]?.GetValue<string>()?.StartsWith(
+                "commerce_",
+                StringComparison.Ordinal) == true) == 4,
+        "The commerce Agent Pack did not receive its four deterministic tools.");
+
+    var passport = await host.ExecuteAsync(
+        "commerce_normalize_product_passport",
+        new JsonObject
+        {
+            ["product_name"] = "Rivoka 电动搅蒜器",
+            ["sku"] = "RIV-GC-360",
+            ["category"] = "电动食物切碎器",
+            ["brand"] = "Rivoka",
+            ["source_country"] = "China",
+            ["target_market"] = "Mexico",
+            ["platform"] = "TikTok Shop",
+            ["currency"] = "MXN",
+            ["sale_price"] = 432,
+            ["unit_product_cost"] = 112,
+            ["confirmed_facts"] = new JsonArray("用户提供售价 432 MXN", "提供一张产品图片"),
+            ["assumptions"] = new JsonArray("玻璃杯是溢价理由"),
+            ["unknowns"] = new JsonArray("食品接触认证"),
+            ["source_refs"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["url"] = "user://provided",
+                    ["observed_at"] = "2026-08-01",
+                    ["note"] = "售价和产品图片"
+                }
+            }
+        },
+        CancellationToken.None);
+    using var passportJson = JsonDocument.Parse(passport);
+    Expect(
+        passportJson.RootElement.GetProperty("readinessScore").GetInt32() >= 70,
+        "Product Passport readiness was not calculated.");
+    Expect(
+        passportJson.RootElement.GetProperty("factRegistry").GetProperty("unknowns")
+            .EnumerateArray().Any(item => item.GetString() == "食品接触认证"),
+        "Product Passport lost a declared unknown.");
+
+    var profit = await host.ExecuteAsync(
+        "commerce_calculate_landed_profit",
+        new JsonObject
+        {
+            ["currency"] = "MXN",
+            ["sale_price"] = 432,
+            ["unit_product_cost"] = 112,
+            ["domestic_shipping"] = 8,
+            ["international_shipping"] = 48,
+            ["packaging"] = 9,
+            ["duty_rate_pct"] = 10,
+            ["import_tax_rate_pct"] = 16,
+            ["platform_fee_rate_pct"] = 6,
+            ["payment_fee_rate_pct"] = 3,
+            ["affiliate_rate_pct"] = 10,
+            ["ad_cost_rate_pct"] = 12,
+            ["return_rate_pct"] = 6,
+            ["return_loss_rate_pct"] = 35,
+            ["return_handling_cost"] = 42,
+            ["other_variable_cost"] = 6
+        },
+        CancellationToken.None);
+    using var profitJson = JsonDocument.Parse(profit);
+    Expect(
+        profitJson.RootElement.GetProperty("outcome").GetProperty("contributionProfit").GetDecimal() > 0,
+        "Landed Profit Engine did not return a positive contribution for the fixture.");
+    Expect(
+        profitJson.RootElement.GetProperty("outcome").GetProperty("breakEvenRoas").GetDecimal() > 1,
+        "Landed Profit Engine did not calculate break-even ROAS.");
+
+    var ledger = await host.ExecuteAsync(
+        "commerce_build_evidence_ledger",
+        new JsonObject
+        {
+            ["as_of"] = "2026-08-01",
+            ["max_age_days"] = 30,
+            ["claims"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["id"] = "market-price",
+                    ["statement"] = "可见竞品价格",
+                    ["value"] = "399 MXN",
+                    ["source_url"] = "https://example.com/a",
+                    ["source_title"] = "Marketplace A",
+                    ["observed_at"] = "2026-07-28",
+                    ["evidence_type"] = "marketplace",
+                    ["confidence"] = 75,
+                    ["market"] = "Mexico / TikTok Shop"
+                },
+                new JsonObject
+                {
+                    ["id"] = "market-price",
+                    ["statement"] = "另一可见竞品价格",
+                    ["value"] = "499 MXN",
+                    ["source_url"] = "https://example.com/b",
+                    ["source_title"] = "Marketplace B",
+                    ["observed_at"] = "2026-07-29",
+                    ["evidence_type"] = "marketplace",
+                    ["confidence"] = 75,
+                    ["market"] = "Mexico / TikTok Shop"
+                }
+            }
+        },
+        CancellationToken.None);
+    using var ledgerJson = JsonDocument.Parse(ledger);
+    Expect(
+        ledgerJson.RootElement.GetProperty("summary").GetProperty("conflicts").GetInt32() == 1
+        && !ledgerJson.RootElement.GetProperty("summary").GetProperty("launchGateReady").GetBoolean(),
+        "Evidence Ledger hid conflicting market values.");
+
+    var demand = await host.ExecuteAsync(
+        "commerce_assess_market_demand",
+        new JsonObject
+        {
+            ["product_name"] = "六头吸顶灯",
+            ["target_market"] = "Mexico",
+            ["platform"] = "Mercado Libre",
+            ["as_of"] = "2026-08-01",
+            ["identity_confidence"] = 88,
+            ["signals"] = new JsonArray
+            {
+                DemandSignal("problem-urgency", 66, 72, "indicative", "需要覆盖较大空间的基础照明。"),
+                DemandSignal("market-activity", 70, 75, "verified", "目标平台存在持续上新的同类供给。"),
+                DemandSignal("differentiation", 58, 65, "indicative", "造型可见，但规格差异仍待确认。"),
+                DemandSignal("local-fit", 62, 64, "indicative", "家用场景基本成立，电气制式待核验。"),
+                DemandSignal("compliance-risk", 55, 70, "verified", "电气认证和标签要求需要进入清单。")
+            }
+        },
+        CancellationToken.None);
+    using var demandJson = JsonDocument.Parse(demand);
+    Expect(
+        demandJson.RootElement.GetProperty("schema").GetString() == "nova.commerce.market-demand-fit.v1"
+        && demandJson.RootElement.GetProperty("summary").GetProperty("evidenceCoveragePct").GetDecimal() >= 40
+        && demandJson.RootElement.GetProperty("dimensions").GetArrayLength() == 12,
+        "Market Demand Fit did not expose its non-financial dimensions and evidence coverage.");
+    Expect(
+        demandJson.RootElement.GetProperty("reasoningBoundary").EnumerateArray()
+            .Any(item => item.GetString()?.Contains("不是销量", StringComparison.Ordinal) == true),
+        "Market Demand Fit did not preserve its no-sales-prediction boundary.");
+});
+
+await CheckAsync("Agent Creation Standard workshop", async () =>
+{
+    var sandbox = Path.Combine(
+        Path.GetTempPath(),
+        "nova-agent-workshop-smoke-" + Guid.NewGuid().ToString("N"));
+    var installed = Path.Combine(sandbox, "installed");
+    var state = Path.Combine(sandbox, "state.json");
+    Directory.CreateDirectory(sandbox);
+    try
+    {
+        var packs = new AgentPackService([], state, installed);
+        var workshop = new AgentPackWorkshopService(packs);
+        Expect(workshop.ListTemplates().Count >= 10, "Agent workshop lost scenario diversity templates.");
+        var request = new AgentPackCreationRequest(
+            "nova.user.smoke-research",
+            "行业研究验证 Agent",
+            "测试行业",
+            "为测试用户生成可以落盘、可以校准并且可以审查的行业研究交付物。",
+            "基于现有资料形成一份可核验的行业判断",
+            "research",
+            "assist",
+            "project",
+            "specialist-team",
+            "document",
+            "balanced",
+            "行业判断报告.md",
+            [],
+            [],
+            []);
+        var recommendation = workshop.Recommend(request);
+        Expect(recommendation.Summary.Contains("测试行业", StringComparison.Ordinal)
+               && recommendation.Summary.Contains("项目持续", StringComparison.Ordinal)
+               && recommendation.RequiredInputs.Any(item => item.Contains("行业判断", StringComparison.Ordinal)),
+            "Agent workshop recommendations did not summarize the first three design stages.");
+        Expect(recommendation.StarterPrompts.Any(item => item.Contains("行业判断报告.md", StringComparison.Ordinal)),
+            "Agent workshop did not derive a concrete start path from the requested delivery.");
+        var created = await workshop.CreateAsync(request);
+        Expect(created.Certification.Level == "Runnable", "Generated Agent Pack was not certified Runnable.");
+        Expect(created.Certification.Score == 100, "Generated Agent Pack did not pass all baseline checks.");
+        var details = packs.Get(created.Pack.Id);
+        Expect(details.Onboarding?.Steps.Count >= 3, "Generated Agent Pack lost guided inputs.");
+        Expect(details.Onboarding?.Outcomes[0].PromptTemplate.Contains("{{required-1}}", StringComparison.Ordinal) == true,
+            "Generated Agent Pack did not carry guided input values into the task prompt.");
+        Expect(details.Workflows.FirstOrDefault()?.Steps.Count >= 4, "Generated Agent Pack lost its executable workflow contract.");
+        Expect(details.Certification?.Score == 100, "Agent certification was not persisted with the installed pack.");
+        Expect(File.Exists(Path.Combine(installed, created.Pack.Id, "agent-card.json")), "Generated Agent Card was not installed.");
+
+        var reviewedDraft = new AgentWorkshopOrchestrationDraft(
+            "A reviewed multi-role operating design.",
+            ["Separate domain discovery from delivery review."],
+            [
+                new AgentWorkshopRoleDraft(
+                    "domain-analyst", "Domain Analyst", "Collect and classify evidence.", ["evidence-map.md"]),
+                new AgentWorkshopRoleDraft(
+                    "workflow-lead", "Workflow Lead", "Synthesize the final result.", ["industry-report.md"]),
+                new AgentWorkshopRoleDraft(
+                    "quality-reviewer", "Quality Reviewer", "Independently verify the delivery.", ["proof-of-done.json"])
+            ],
+            [
+                new AgentWorkshopStepDraft(1, "Discover evidence", "domain-analyst", "evidence-map.md", ["Sources are traceable"]),
+                new AgentWorkshopStepDraft(2, "Build the result", "workflow-lead", "industry-report.md", ["The requested outcome is complete"]),
+                new AgentWorkshopStepDraft(3, "Review independently", "quality-reviewer", "proof-of-done.json", ["Every claim has an explicit verdict"])
+            ],
+            ["Target market", "候选人简历文件"],
+            ["Historical examples"],
+            ["Research this market and produce industry-report.md"],
+            ["Sparse evidence may lower confidence."],
+            "approved",
+            "smoke-provider",
+            "review-model");
+        var reviewedRequest = request with
+        {
+            Id = "nova.user.smoke-orchestrated",
+            Name = "Reviewed Orchestration Agent",
+            Orchestration = reviewedDraft
+        };
+        var reviewed = await workshop.CreateAsync(reviewedRequest);
+        var reviewedDetails = packs.Get(reviewed.Pack.Id);
+        Expect(reviewedDetails.Workflows[0].Steps.Select(step => step.Agent)
+                .SequenceEqual(["domain-analyst", "workflow-lead", "quality-reviewer"]),
+            "Reviewed orchestration roles were not persisted into the executable workflow.");
+        Expect(reviewedDetails.Workflows[0].Steps.Count == reviewedDraft.Workflow.Count,
+            "Reviewed orchestration lost one or more approved execution steps during Pack compilation.");
+        Expect(reviewedDetails.Onboarding?.Steps.Any(step =>
+                step.Title.Contains("简历", StringComparison.Ordinal)
+                && step.Kind.Equals("attachment", StringComparison.OrdinalIgnoreCase)) == true,
+            "File-oriented required inputs were rendered as text fields instead of upload controls.");
+        Expect(reviewedDetails.AgentRoster.Contains("Domain Analyst", StringComparison.Ordinal)
+               && reviewedDetails.AgentRoster.Contains("Quality Reviewer", StringComparison.Ordinal),
+            "Reviewed orchestration roster was replaced by the legacy two-role template.");
+        var reviewedManifest = await File.ReadAllTextAsync(
+            Path.Combine(installed, reviewed.Pack.Id, "nova.industry.json"));
+        Expect(reviewedManifest.Contains("review-model", StringComparison.Ordinal)
+               && reviewedManifest.Contains("Sparse evidence", StringComparison.Ordinal),
+            "The reviewer provenance and risks were not persisted with the Agent Pack.");
+        _ = await packs.RemoveAsync(reviewed.Pack.Id);
+        Expect(!Directory.Exists(Path.Combine(installed, reviewed.Pack.Id)),
+            "A removable Agent Pack remained in the installed extension directory.");
+        try
+        {
+            _ = packs.Get(reviewed.Pack.Id);
+            throw new Exception("A removed Agent Pack remained available in the registry.");
+        }
+        catch (InvalidOperationException exception) when (
+            exception.Message.Contains("不存在", StringComparison.Ordinal))
+        {
+        }
+    }
+    finally
+    {
+        if (Directory.Exists(sandbox))
+        {
+            Directory.Delete(sandbox, recursive: true);
+        }
+    }
+});
+
+await CheckAsync("Agent calibration overlays are scoped and reversible", async () =>
+{
+    var sandbox = Path.Combine(
+        Path.GetTempPath(),
+        "nova-agent-calibration-smoke-" + Guid.NewGuid().ToString("N"));
+    var state = Path.Combine(sandbox, "calibrations.json");
+    var workspace = Path.Combine(sandbox, "project-a");
+    var otherWorkspace = Path.Combine(sandbox, "project-b");
+    Directory.CreateDirectory(workspace);
+    Directory.CreateDirectory(otherWorkspace);
+    try
+    {
+        var calibration = new AgentCalibrationService(state);
+        const string packId = "nova.user.smoke-research";
+        await calibration.CreateAsync(new CreateAgentCalibrationRequest(
+            packId, "agent", "judgment",
+            "行业结论必须同时检查真实需求和竞争密度。",
+            null, null, "行业报告", "行业报告.md"));
+        await calibration.CreateAsync(new CreateAgentCalibrationRequest(
+            packId, "project", "format",
+            "当前项目的交付文件使用中文名称。",
+            null, workspace, "项目交付", "交付物.md"));
+        await calibration.CreateAsync(new CreateAgentCalibrationRequest(
+            packId, "turn", "evidence",
+            "本轮所有判断都要标出证据等级。",
+            "task-a", workspace, "本轮回答", null));
+
+        var exact = calibration.BuildRuntimeContext(packId, "task-a", workspace);
+        Expect(exact.Contains("真实需求和竞争密度", StringComparison.Ordinal)
+               && exact.Contains("中文名称", StringComparison.Ordinal)
+               && exact.Contains("证据等级", StringComparison.Ordinal),
+            "Applicable Agent, project and turn calibrations were not composed.");
+
+        var nextTurn = calibration.BuildRuntimeContext(packId, "task-b", workspace);
+        Expect(nextTurn.Contains("真实需求和竞争密度", StringComparison.Ordinal)
+               && nextTurn.Contains("中文名称", StringComparison.Ordinal)
+               && !nextTurn.Contains("证据等级", StringComparison.Ordinal),
+            "Turn calibration leaked into another task or project rules were lost.");
+
+        var otherProject = calibration.BuildRuntimeContext(packId, "task-b", otherWorkspace);
+        Expect(otherProject.Contains("真实需求和竞争密度", StringComparison.Ordinal)
+               && !otherProject.Contains("中文名称", StringComparison.Ordinal),
+            "Project calibration leaked into another workspace.");
+
+        var snapshot = calibration.GetSnapshot(packId);
+        var agentPatch = snapshot.Patches.Single(patch => patch.Scope == "agent");
+        var rolledBack = await calibration.RollbackAsync(packId, agentPatch.Id);
+        Expect(rolledBack.ActiveCount == 2, "Calibration rollback did not update the active count.");
+        Expect(!calibration.BuildRuntimeContext(packId, "task-b", otherWorkspace)
+                .Contains("真实需求和竞争密度", StringComparison.Ordinal),
+            "Rolled-back calibration still affected runtime context.");
+    }
+    finally
+    {
+        if (Directory.Exists(sandbox))
+        {
+            Directory.Delete(sandbox, recursive: true);
+        }
     }
 });
 
@@ -619,6 +1022,39 @@ await CheckAsync("DeepSeek SSE tool loop", async () =>
     Expect(events.Any(item => item.Kind == AgentRuntimeEventKind.Thinking), "No DeepSeek thinking event was emitted.");
 });
 
+await CheckAsync("Evolution runtime exposes only bounded plugin tools", async () =>
+{
+    var handler = new FakeEvolutionToolFilterHandler();
+    var runtime = new DeepSeekChatAgentRuntime(new HttpClient(handler), runtimeEvidence);
+    var allowedTools = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "list_workspace_files",
+        "read_text_file",
+        "write_text_file",
+        "replace_text_in_file"
+    };
+    var result = await runtime.RunAsync(
+        new AgentRunRequest(
+            "evolution-tool-filter",
+            "Improve SKILL.md in this isolated plugin sandbox.",
+            @"D:\Agent",
+            "ds-test",
+            "deepseek",
+            "deepseek-v4-flash",
+            AgentExecutionMode.Build,
+            AllowParallelDelegation: false,
+            AgentPackId: null,
+            AllowedToolNames: allowedTools),
+        _ => Task.CompletedTask,
+        _ => throw new Exception("No tool was executed in the definition-filter smoke."),
+        CancellationToken.None);
+
+    Expect(result.FinalText == "Evolution tool boundary ready.",
+        "Evolution tool-filter runtime did not complete.");
+    Expect(handler.ToolNames.SetEquals(allowedTools),
+        "Evolution runtime exposed unrelated workspace, memory or orchestration tools.");
+});
+
 await CheckAsync("Kimi transient stream recovery", async () =>
 {
     var handler = new FakeTransientKimiHandler();
@@ -709,16 +1145,35 @@ await CheckAsync("Kimi multimodal API and bounded attachments", async () =>
     {
         var imagePath = Path.Combine(temporaryDirectory, "screen.png");
         var textPath = Path.Combine(temporaryDirectory, "context.md");
+        var pdfPath = Path.Combine(temporaryDirectory, "market-report.pdf");
+        var wordPath = Path.Combine(temporaryDirectory, "requirements.docx");
         await File.WriteAllBytesAsync(
             imagePath,
             [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
         await File.WriteAllTextAsync(textPath, "# 交付要求\n保留本地隐私边界。");
 
+        await File.WriteAllBytesAsync(pdfPath, CreateMinimalPdf("PDF ATTACHMENT EVIDENCE"));
+        using (var word = WordprocessingDocument.Create(
+                   wordPath,
+                   WordprocessingDocumentType.Document))
+        {
+            var mainPart = word.AddMainDocumentPart();
+            mainPart.Document = new Document(
+                new Body(
+                    new Paragraph(
+                        new Run(
+                            new Text("WORD ATTACHMENT REQUIREMENTS")))));
+            mainPart.Document.Save();
+        }
+
         var attachmentService = new InputAttachmentService(
             Path.Combine(temporaryDirectory, "persisted"));
         var selected = attachmentService.ValidateSelection(
-            [imagePath, textPath],
+            [imagePath, textPath, pdfPath, wordPath],
             []);
+        Expect(
+            selected.Count(item => item.Kind == AgentAttachmentKind.Document) == 2,
+            "PDF and Word attachments were not classified as documents.");
         var attachments = await attachmentService.PersistAsync(
             "kimi-smoke",
             selected,
@@ -746,19 +1201,17 @@ await CheckAsync("Kimi multimodal API and bounded attachments", async () =>
         Expect(handler.ContainedTextAttachment, "Kimi request did not contain the selected text file.");
         Expect(handler.UsedKimiTokenField, "Kimi request did not use max_completion_tokens.");
 
-        var unsupportedPath = Path.Combine(temporaryDirectory, "unsupported.pdf");
-        await File.WriteAllTextAsync(unsupportedPath, "%PDF-1.7");
-        try
-        {
-            attachmentService.ValidateSelection(
-                [unsupportedPath],
-                []);
-            throw new Exception("Unsupported attachments were accepted.");
-        }
-        catch (InvalidOperationException)
-        {
-            // Unsupported binary document formats remain outside the honest capability boundary.
-        }
+        var modelContent = await InputAttachmentService.BuildChatContentAsync(
+            "Review the attached documents.",
+            "kimi",
+            attachments,
+            CancellationToken.None);
+        var serializedContent = modelContent.ToJsonString();
+        Expect(
+            serializedContent.Contains("PDF ATTACHMENT EVIDENCE", StringComparison.Ordinal)
+            && serializedContent.Contains("WORD ATTACHMENT REQUIREMENTS", StringComparison.Ordinal)
+            && serializedContent.Contains("market-report.pdf", StringComparison.Ordinal),
+            "PDF or Word text was not extracted into model-readable content.");
 
         var settingsXaml = await File.ReadAllTextAsync(
             @"D:\Agent\NovaDesktop\SettingsWindow.xaml");
@@ -1315,6 +1768,33 @@ await CheckAsync("MCP discovery sanitizes and imports disabled", async () =>
                 .Registration.EnvironmentVariables["TOKEN"] == "CODEX_MCP_TOKEN",
             "Codex TOML MCP environment mapping was not discovered.");
 
+        var pastedRemote = discovery.PreviewConfiguration(
+            """
+            {
+              "mcpServers": {
+                "internet-mcp": {
+                  "url": "https://mcp.example.test/mcp",
+                  "headers": {
+                    "Authorization": "${INTERNET_MCP_AUTH}"
+                  }
+                }
+              }
+            }
+            """,
+            registry.GetServers());
+        Expect(pastedRemote.Count == 1 && pastedRemote[0].CanImport,
+            "Pasted Internet MCP configuration was not accepted for review.");
+        Expect(
+            pastedRemote[0].Registration.HttpHeaders?["Authorization"] == "INTERNET_MCP_AUTH",
+            "Pasted Internet MCP credential reference was not sanitized.");
+        Expect(!pastedRemote[0].Registration.Enabled,
+            "Pasted Internet MCP was enabled before user confirmation.");
+        var documentationLink = discovery.PreviewConfiguration(
+            "https://github.com/example/example-mcp-server",
+            registry.GetServers());
+        Expect(documentationLink.Count == 1 && !documentationLink[0].CanImport,
+            "Repository documentation URL was mistaken for a live MCP endpoint.");
+
         await registry.UpsertAsync(
             safeLocal.Registration with { Enabled = false },
             CancellationToken.None);
@@ -1613,6 +2093,12 @@ await CheckAsync("Evolution Lab plugin-only budget and guarded installation", as
         var unsafePrepared = await lab.PrepareAsync(unsafeExperiment.Id);
         unsafeExperiment = unsafePrepared.Experiments.First(item =>
             item.Id == unsafeExperiment.Id);
+        var unsafeRuntimeBudget = await lab.ReserveRuntimeBudgetAsync(
+            unsafeExperiment.IsolatedWorkspace!);
+        Expect(
+            unsafeRuntimeBudget is { ReservedTokens: 8000 }
+            && lab.GetSnapshot().UsedTokensThisMonth == 16_000,
+            "Second Evolution run did not reserve its bounded model budget.");
         await File.WriteAllTextAsync(
             Path.Combine(unsafeExperiment.IsolatedWorkspace!, "payload.js"),
             "require('child_process').exec('whoami')");
@@ -1624,6 +2110,22 @@ await CheckAsync("Evolution Lab plugin-only budget and guarded installation", as
             && unsafeExperiment.Blockers.Any(item =>
                 item.Contains("未授权文件", StringComparison.Ordinal)),
             "Evolution Lab accepted executable plugin content.");
+
+        await lab.ConfigureAsync(
+            enabled: true,
+            scheduledDiscoveryEnabled: false,
+            maxTokensPerExperiment: 8_000,
+            monthlyTokenBudget: 24_000,
+            maxExperimentsPerWeek: 2,
+            maxModelRounds: 2);
+        var retryBudget = await lab.ReserveRuntimeBudgetAsync(
+            unsafeExperiment.IsolatedWorkspace!);
+        Expect(
+            retryBudget is { ReservedTokens: 8000 }
+            && lab.GetSnapshot().UsedTokensThisMonth == 24_000
+            && lab.GetSnapshot().Experiments.First(item => item.Id == unsafeExperiment.Id).State
+               == EvolutionExperimentState.Running,
+            "A failed Evolution experiment could not be retried within the monthly budget.");
     }
     finally
     {
@@ -2155,6 +2657,27 @@ await CheckAsync("persistent versioned artifacts and knowledge integration", asy
             ]))[0];
         Expect(versionOne.Version == 1, "First artifact version was not v1.");
         Expect(File.Exists(versionOne.Location), "Artifact file was not created.");
+        Expect(
+            Path.GetFileName(versionOne.Location).Any(character =>
+                character is >= '\u4e00' and <= '\u9fff'),
+            "Non-programming artifact did not receive a readable Chinese file name.");
+
+        var codeArtifact = (await repository.PersistAsync(
+            task,
+            [
+                new ArtifactItem(
+                    "code",
+                    "settings-service",
+                    "C# source",
+                    "",
+                    "#75F0FF",
+                    "public sealed class SettingsService {}")
+            ]))[0];
+        Expect(
+            Path.GetFileName(codeArtifact.Location).StartsWith(
+                "code-settings-service",
+                StringComparison.OrdinalIgnoreCase),
+            "Programming artifact naming no longer follows engineering conventions.");
 
         var versionTwo = (await repository.PersistAsync(
             task,
@@ -2169,7 +2692,9 @@ await CheckAsync("persistent versioned artifacts and knowledge integration", asy
             ]))[0];
         Expect(versionTwo.Version == 2, "Changed artifact did not create v2.");
         Expect(repository.GetVersions(versionTwo.Id).Count == 2, "Artifact version history did not persist.");
-        Expect(repository.GetForTask(task.Id).Single().Version == 2, "Task artifact list did not return the latest version.");
+        Expect(
+            repository.GetForTask(task.Id).Single(item => item.Id == versionTwo.Id).Version == 2,
+            "Task artifact list did not return the latest version.");
 
         var index = new KnowledgeIndexService(
             Path.Combine(temporaryDirectory, "knowledge-index.json"),
@@ -4668,6 +5193,20 @@ await CheckAsync("Autopilot automatic child-agent planning", async () =>
         executionPlan?["steps"]?.AsArray().Count == 3
         && executionPlan["steps"]?[0]?["agent"]?.GetValue<string>() == "子 Agent 1",
         "Automatic worker plan is not projectable into the live task-plan UI.");
+    var workshopPlan = AutomaticAgentPlanner.Create(
+        "[NOVA_AGENT_WORKSHOP]\n为跨境电商内容生产设计专业 Agent",
+        AgentExecutionMode.Goal,
+        allowParallelDelegation: true)
+        ?? throw new Exception("Agent Workshop did not create a council plan.");
+    Expect(
+        workshopPlan.Tasks.Select(task => task.Title).SequenceEqual(
+            new[] { "行业架构师", "工作流架构师", "信任审查官" }),
+        "Agent Workshop did not reuse the expected three-role council.");
+    Expect(
+        workshopPlan.Tasks.All(task =>
+            task.Instruction.Contains("不要修改", StringComparison.Ordinal)
+            || task.Instruction.Contains("只读", StringComparison.Ordinal)),
+        "Agent Workshop council roles are not constrained to read-only analysis.");
     var approvalPreview = plan.ToApprovalPreview();
     Expect(
         approvalPreview.Length < 1200
@@ -5454,6 +5993,56 @@ await CheckAsync("0.9 durable Agent Supervisor lease recovery", async () =>
     }
 });
 
+await CheckAsync("terminal checkpoint lease is recoverable without stealing live work", async () =>
+{
+    var temporaryDirectory = Path.Combine(
+        Path.GetTempPath(),
+        "nova-terminal-lease-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var task = new TaskItem
+        {
+            Id = "terminal-checkpoint-smoke",
+            Title = "Terminal checkpoint recovery",
+            Description = "Recover a model-completed task from completion commit failure",
+            WorkspaceRoot = @"D:\Agent",
+            ExecutionMode = AgentExecutionMode.Goal,
+            State = TaskState.Running,
+            Stage = "DeepSeek 任务完成"
+        };
+        var oldHost = new AgentSupervisorService(temporaryDirectory);
+        await oldHost.BootAsync("old-host");
+        await oldHost.AcquireAsync(task);
+        await oldHost.HeartbeatAsync(
+            task.Id,
+            "DeepSeek 任务完成",
+            forcePersist: true);
+
+        var recoveryHost = new AgentSupervisorService(temporaryDirectory);
+        await recoveryHost.BootAsync("recovery-host");
+        var recovered = await recoveryHost.AcquireAsync(task);
+        Expect(
+            recovered.OwnerBootId == "recovery-host" && recovered.Epoch == 2,
+            "An explicitly terminal model checkpoint could not be safely adopted.");
+        task.State = TaskState.Completed;
+        task.Stage = "Agent Pack contract checks completed";
+        await recoveryHost.ReleaseAsync(task);
+        recoveryHost.Dispose();
+        oldHost.Dispose();
+
+        var verifier = new AgentSupervisorService(temporaryDirectory);
+        var snapshot = await verifier.BootAsync("verifier");
+        Expect(
+            snapshot.Leases.Single().State == AgentSupervisorLeaseState.Completed,
+            "Recovered terminal lease did not persist the final task state.");
+        verifier.Dispose();
+    }
+    finally
+    {
+        DeleteGeneratedTestDirectory(temporaryDirectory);
+    }
+});
+
 await CheckAsync("Electron top-level workspace approval contract", async () =>
 {
     var bridgeSource = await File.ReadAllTextAsync(
@@ -5540,7 +6129,7 @@ await CheckAsync("Electron 1.0 trustworthy cross-model delivery contract", async
         && mainSource.Contains("requiresWorkspaceMutation", StringComparison.Ordinal)
         && mainSource.Contains("deliveryStatus = \"PARTIAL\"", StringComparison.Ordinal)
         && rendererSource.Contains("双模型复核", StringComparison.Ordinal)
-        && rendererSource.Contains("delivery-passport", StringComparison.Ordinal),
+        && rendererSource.Contains("delivery-result", StringComparison.Ordinal),
         "The 1.0 renderer can no longer opt into cross-model review or expose truthful partial delivery.");
 });
 
@@ -5598,6 +6187,143 @@ await CheckAsync("Electron bridge non-blocking start and lease retry contract", 
             "2 * 60 * 1000",
             StringComparison.Ordinal),
         "Electron still applies the legacy twenty-second timeout to AgentOS task startup.");
+    Expect(
+        bridgeSource.Contains("using var runtimeEventGate", StringComparison.Ordinal)
+        && bridgeSource.Contains("await runtimeEventGate.WaitAsync", StringComparison.Ordinal),
+        "Parallel tool progress can still race while persisting one task snapshot and abort a successful round.");
+});
+
+await CheckAsync("Agent Pack generation enters the durable task workspace", async () =>
+{
+    var mainSource = await File.ReadAllTextAsync(
+        @"D:\Agent\NovaDesktop.Electron\electron\main.cjs");
+    var rendererSource = await File.ReadAllTextAsync(
+        @"D:\Agent\NovaDesktop.Electron\src\App.tsx");
+    var workshopSource = await File.ReadAllTextAsync(
+        @"D:\Agent\NovaDesktop\Services\AgentPackWorkshopService.cs");
+    var createHandlerStart = mainSource.IndexOf(
+        "ipcMain.handle(\"nova:create-agent-pack\"",
+        StringComparison.Ordinal);
+    var createHandlerEnd = mainSource.IndexOf(
+        "ipcMain.handle(\"nova:list-agent-calibrations\"",
+        createHandlerStart,
+        StringComparison.Ordinal);
+    var createHandler = createHandlerStart >= 0 && createHandlerEnd > createHandlerStart
+        ? mainSource[createHandlerStart..createHandlerEnd]
+        : string.Empty;
+    var buildStarterStart = mainSource.IndexOf(
+        "async function startAgentPackBuild",
+        StringComparison.Ordinal);
+    var buildStarterEnd = mainSource.IndexOf(
+        "function modelSourceId",
+        buildStarterStart,
+        StringComparison.Ordinal);
+    var buildStarter = buildStarterStart >= 0 && buildStarterEnd > buildStarterStart
+        ? mainSource[buildStarterStart..buildStarterEnd]
+        : string.Empty;
+    Expect(
+        mainSource.Contains("startAgentPackBuild", StringComparison.Ordinal)
+        && mainSource.Contains("executeAgentPackBuild", StringComparison.Ordinal)
+        && mainSource.Contains("bridge.call(\"start_task\"", StringComparison.Ordinal)
+        && mainSource.Contains("bridge.call(\"task_event\"", StringComparison.Ordinal)
+        && mainSource.Contains("bridge.call(\"complete_task\"", StringComparison.Ordinal),
+        "Agent Pack generation is not represented by a durable AgentOS task and real task events.");
+    Expect(
+        mainSource.Contains("validateGeneratedAgentPack", StringComparison.Ordinal)
+        && mainSource.Contains("标准体检没有达到 100/100", StringComparison.Ordinal)
+        && workshopSource.Contains("certification.Checks.Any(check => !check.Passed)", StringComparison.Ordinal),
+        "An incomplete Agent Pack can still be registered as a usable generated Agent.");
+    Expect(
+        rendererSource.Contains("setSettingsOpen(false)", StringComparison.Ordinal)
+        && rendererSource.Contains("Agent Pack 构建任务已进入任务空间", StringComparison.Ordinal)
+        && rendererSource.Contains("Agent Pack 生成与可用性验证", StringComparison.Ordinal),
+        "The workshop does not navigate into the task workspace after build confirmation.");
+    Expect(
+        createHandler.Contains("startAgentPackBuild", StringComparison.Ordinal)
+        && !createHandler.Contains("showMessageBox", StringComparison.Ordinal)
+        && rendererSource.Contains("构建任务未创建", StringComparison.Ordinal),
+        "An already-reviewed Agent draft is blocked by a redundant native confirmation or hides task-start errors.");
+    Expect(
+        buildStarter.Contains("agentPackId: null", StringComparison.Ordinal)
+        && !buildStarter.Contains("agentPackId: request?.id", StringComparison.Ordinal),
+        "Agent Pack build task incorrectly requires the not-yet-created target Pack to already exist and be enabled.");
+    Expect(
+        rendererSource.Contains("generateAgentId", StringComparison.Ordinal)
+        && rendererSource.Contains("Agent ID · 系统自动生成", StringComparison.Ordinal)
+        && !rendererSource.Contains("nova.user.new-agent", StringComparison.Ordinal),
+        "Agent Workshop still reuses a hard-coded editable Agent ID.");
+    Expect(
+        rendererSource.Contains("window.nova.agentPacks.remove", StringComparison.Ordinal)
+        && mainSource.Contains("nova:remove-agent-pack", StringComparison.Ordinal)
+        && mainSource.Contains("请先停用此 Agent Pack", StringComparison.Ordinal),
+        "Installed Agent Packs cannot be safely removed from the Agent Center.");
+});
+
+await CheckAsync("Agent Workshop uses a persistent design session before task creation", async () =>
+{
+    var mainSource = await File.ReadAllTextAsync(
+        @"D:\Agent\NovaDesktop.Electron\electron\main.cjs");
+    var preloadSource = await File.ReadAllTextAsync(
+        @"D:\Agent\NovaDesktop.Electron\electron\preload.cjs");
+    var rendererSource = await File.ReadAllTextAsync(
+        @"D:\Agent\NovaDesktop.Electron\src\App.tsx");
+    var plannerSource = await File.ReadAllTextAsync(
+        @"D:\Agent\NovaDesktop\Services\AutomaticAgentPlanner.cs");
+    var deepSeekRuntimeSource = await File.ReadAllTextAsync(
+        @"D:\Agent\NovaDesktop\Services\DeepSeekChatAgentRuntime.cs");
+    var openAiRuntimeSource = await File.ReadAllTextAsync(
+        @"D:\Agent\NovaDesktop\Services\OpenAIResponsesAgentRuntime.cs");
+    var bridgeSource = await File.ReadAllTextAsync(
+        @"D:\Agent\Nova.AgentOS.Bridge\Program.cs");
+    Expect(
+        mainSource.Contains("startAgentWorkshopSession", StringComparison.Ordinal)
+        && mainSource.Contains("executeAgentWorkshopSession", StringComparison.Ordinal)
+        && mainSource.Contains("bridge.call(\"run_design_session\"", StringComparison.Ordinal)
+        && mainSource.Contains("design-sessions.json", StringComparison.Ordinal)
+        && mainSource.Contains("nova:agent-workshop-ready", StringComparison.Ordinal),
+        "Agent Workshop does not use a recoverable design session backed by the AgentOS runtime.");
+    Expect(
+        plannerSource.Contains("[NOVA_AGENT_WORKSHOP]", StringComparison.Ordinal)
+        && plannerSource.Contains("行业架构师", StringComparison.Ordinal)
+        && plannerSource.Contains("工作流架构师", StringComparison.Ordinal)
+        && plannerSource.Contains("信任审查官", StringComparison.Ordinal)
+        && bridgeSource.Contains("RunDesignSessionAsync", StringComparison.Ordinal)
+        && bridgeSource.Contains("Design session", StringComparison.Ordinal)
+        && bridgeSource.Contains("仅允许本轮真实子 Agent 委派", StringComparison.Ordinal),
+        "AgentOS does not provide a read-only Agent Workshop council plan and approval boundary.");
+    Expect(
+        mainSource.Contains("nova:cancel-agent-pack-orchestration", StringComparison.Ordinal)
+        && mainSource.Contains("cancel_design_session", StringComparison.Ordinal)
+        && preloadSource.Contains("cancelOrchestration", StringComparison.Ordinal)
+        && mainSource.Contains("本次智能体编排已停止", StringComparison.Ordinal),
+        "Agent Workshop does not expose an end-to-end cancellation path.");
+    Expect(
+        rendererSource.Contains("这里完成审阅前不会创建任务空间", StringComparison.Ordinal)
+        && rendererSource.Contains("getDesignSession", StringComparison.Ordinal)
+        && preloadSource.Contains("onOrchestrationReady", StringComparison.Ordinal),
+        "Agent Workshop does not remain in Agent Center or restore the reviewed draft.");
+    Expect(
+        !mainSource.Contains("信任审查官没有批准当前编排", StringComparison.Ordinal)
+        && rendererSource.Contains("用户已在 Agent 中心审阅并确认本版编排草案", StringComparison.Ordinal)
+        && rendererSource.Contains("确认方案并构建 Agent Pack", StringComparison.Ordinal),
+        "A structurally complete council draft cannot be human-approved before the formal Pack build.");
+    Expect(
+        deepSeekRuntimeSource.Contains("TaskId.StartsWith(\"design:\"", StringComparison.Ordinal)
+        && openAiRuntimeSource.Contains("TaskId.StartsWith(\"design:\"", StringComparison.Ordinal)
+        && mainSource.Contains("agent = \"编排委员会\"", StringComparison.Ordinal),
+        "Agent Workshop still exposes unrelated workspace tools or noisy internal role cards during design.");
+    Expect(
+        bridgeSource.Contains("stageOutputs", StringComparison.Ordinal)
+        && bridgeSource.Contains("allowParallelDelegation", StringComparison.Ordinal)
+        && bridgeSource.Contains("stageOutputs.Count < 24", StringComparison.Ordinal)
+        && !bridgeSource.Contains("runtimeEvent.Agent.StartsWith(\"子 Agent \"", StringComparison.Ordinal)
+        && mainSource.Contains("buildAgentWorkshopRepairPrompt", StringComparison.Ordinal)
+        && mainSource.Contains("recoverWorkshopDraftFromStageOutputs", StringComparison.Ordinal)
+        && mainSource.Contains("coerceWorkshopDraft", StringComparison.Ordinal)
+        && mainSource.Contains("已恢复可审阅草案", StringComparison.Ordinal)
+        && mainSource.Contains("只进行一次轻量结构修复", StringComparison.Ordinal)
+        && mainSource.Contains("编排草案已生成", StringComparison.Ordinal),
+        "Malformed council JSON discards completed child-Agent analysis instead of repairing and delivering a reviewable draft.");
 });
 
 if (File.Exists(runtimeEvidencePath))
@@ -6057,6 +6783,42 @@ file sealed class FakeDeepSeekHandler : HttpMessageHandler
                 """;
         }
 
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(response, Encoding.UTF8, "text/event-stream")
+        };
+    }
+}
+
+file sealed class FakeEvolutionToolFilterHandler : HttpMessageHandler
+{
+    public HashSet<string> ToolNames { get; } = new(StringComparer.Ordinal);
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+        var root = JsonNode.Parse(body)?.AsObject();
+        if (root?["tools"] is JsonArray tools)
+        {
+            foreach (var item in tools.OfType<JsonObject>())
+            {
+                var name = item["function"]?["name"]?.GetValue<string>()
+                           ?? item["name"]?.GetValue<string>();
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    ToolNames.Add(name);
+                }
+            }
+        }
+
+        const string response = """
+            data: {"id":"chat_evolution_filter","choices":[{"delta":{"content":"Evolution tool boundary ready."},"finish_reason":"stop"}]}
+
+            data: [DONE]
+
+            """;
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(response, Encoding.UTF8, "text/event-stream")

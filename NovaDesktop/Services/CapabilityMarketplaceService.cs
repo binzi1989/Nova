@@ -171,6 +171,33 @@ public sealed class CapabilityMarketplaceService
                     false,
                     new Dictionary<string, string>())),
             CreateMcp(
+                "mercadolibre-official",
+                "跨境电商",
+                "Mercado Libre 官方 MCP",
+                "Mercado Libre",
+                "连接 Mercado Libre 官方远程 MCP；用于授权账号范围内的商品、订单和平台资源操作。",
+                "官方源",
+                "外部账号",
+                "加载只登记 HTTPS 地址并保持停用；访问范围取决于 Mercado Libre Access Token，真实调用仍需审批。",
+                "环境变量 MERCADOLIBRE_AUTHORIZATION（值为 Bearer + 空格 + Access Token）",
+                "https://github.com/mercadolibre/mercadolibre-mcp-server",
+                [],
+                ["MERCADOLIBRE_AUTHORIZATION"],
+                mayAcquireSoftware: false,
+                new McpServerRegistration(
+                    "mercadolibre-official",
+                    string.Empty,
+                    [],
+                    _workspaceRoot,
+                    false,
+                    new Dictionary<string, string>(),
+                    "http",
+                    "https://mcp.mercadolibre.com/mcp",
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["Authorization"] = "MERCADOLIBRE_AUTHORIZATION"
+                    })),
+            CreateMcp(
                 "filesystem-workspace",
                 "本地工程",
                 "Filesystem MCP（仅当前工作区）",

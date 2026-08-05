@@ -3,6 +3,10 @@
 </p>
 
 <p align="center">
+  <strong>简体中文</strong> · <a href="README_EN.md">English</a>
+</p>
+
+<p align="center">
   <strong>把目标变成可验证的成果，而不只是生成一段回答。</strong>
 </p>
 
@@ -31,7 +35,15 @@
 </p>
 
 > [!IMPORTANT]
-> 当前公开基线为 `1.0.3`，本仓库正在推进 `1.1.0-preview.15`。安装包尚未签名，自动更新默认关闭；公开下载以 [GitHub Releases](https://github.com/binzi1989/Nova/releases) 为准。NOVA 已具备完整产品骨架，但仍处于真实任务与跨平台验证阶段，不把本地测试通过等同于 GA。
+> 最新预览版为 `1.1.0-preview.15`。安装包尚未签名，自动更新默认关闭；公开下载以 [GitHub Releases](https://github.com/binzi1989/Nova/releases) 为准。NOVA 已具备完整产品骨架，但仍处于真实任务与跨平台验证阶段，不把本地测试通过等同于 GA。
+
+## 本次预览版
+
+- **Agent 工坊更可靠**：完整保存每个设计 Agent 的阶段产出；结构不完整时先做本地修复，仅在无法解析时追加一次受限模型修复，避免重复消耗整轮 Token。
+- **失败也保留真实成果**：可恢复的草案进入人工审阅，不再因为协调模型的一次格式偏差而丢弃整个编排结果。
+- **附件更实用**：Word、PDF 与常见文本附件进入统一读取链路，无法安全提取时明确说明原因，不把常见办公文件直接判为不可用。
+- **Agent Pack 更完整**：随机独立 ID、安全移除、行业模板、首次使用引导、能力依赖和真实构建任务共同遵循 Agent Creation Standard。
+- **Windows 包已验证**：Electron 客户端、AgentOS Bridge、工坊恢复冒烟测试与生产构建均已通过。
 
 ## NOVA 是什么
 

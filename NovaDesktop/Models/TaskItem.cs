@@ -31,6 +31,7 @@ public sealed class TaskItem : INotifyPropertyChanged
     public string WorkspaceRoot { get; set; } = string.Empty;
     public string Provider { get; set; } = "openai";
     public string Model { get; set; } = "gpt-5.6";
+    public string? AgentPackId { get; set; }
     public AgentExecutionMode ExecutionMode { get; set; } = AgentExecutionMode.Build;
     public string Draft { get; set; } = string.Empty;
     public IReadOnlyList<AgentInputAttachment> Attachments { get; set; } = [];

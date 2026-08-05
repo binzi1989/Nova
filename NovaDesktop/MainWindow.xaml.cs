@@ -174,7 +174,7 @@ public partial class MainWindow : Window
             Multiselect = true,
             CheckFileExists = true,
             Filter =
-                "NOVA 可理解的文件|*.png;*.jpg;*.jpeg;*.webp;*.txt;*.md;*.json;*.jsonc;*.xml;*.yaml;*.yml;*.toml;*.ini;*.cfg;*.conf;*.log;*.csv;*.tsv;*.cs;*.csproj;*.sln;*.js;*.jsx;*.ts;*.tsx;*.py;*.java;*.kt;*.go;*.rs;*.cpp;*.c;*.h;*.hpp;*.swift;*.php;*.rb;*.ps1;*.html;*.css;*.vue;*.sql;*.graphql;*.wxml;*.wxss|图片|*.png;*.jpg;*.jpeg;*.webp|文本与代码|*.txt;*.md;*.json;*.xml;*.yaml;*.yml;*.toml;*.csv;*.cs;*.js;*.ts;*.py;*.java;*.go;*.rs;*.html;*.css;*.sql",
+                "NOVA 可理解的文件|*.png;*.jpg;*.jpeg;*.webp;*.pdf;*.doc;*.docx;*.docm;*.dotx;*.dotm;*.txt;*.md;*.json;*.jsonc;*.xml;*.yaml;*.yml;*.toml;*.ini;*.cfg;*.conf;*.log;*.csv;*.tsv;*.cs;*.csproj;*.sln;*.js;*.jsx;*.ts;*.tsx;*.py;*.java;*.kt;*.go;*.rs;*.cpp;*.c;*.h;*.hpp;*.swift;*.php;*.rb;*.ps1;*.html;*.css;*.vue;*.sql;*.graphql;*.wxml;*.wxss|PDF 与 Word|*.pdf;*.doc;*.docx;*.docm;*.dotx;*.dotm|图片|*.png;*.jpg;*.jpeg;*.webp|文本与代码|*.txt;*.md;*.json;*.xml;*.yaml;*.yml;*.toml;*.csv;*.cs;*.js;*.ts;*.py;*.java;*.go;*.rs;*.html;*.css;*.sql",
             RestoreDirectory = true
         };
         if (picker.ShowDialog(this) == true)

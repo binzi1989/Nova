@@ -1,0 +1,24 @@
+{
+  "cardVersion": "1.0",
+  "id": "nova.replace-with-industry",
+  "name": "NOVA Industry Agent",
+  "version": "0.1.0",
+  "objective": "填写可检查的最终业务结果",
+  "intents": ["填写用户可以直接开始的典型任务"],
+  "inputSchema": {
+    "required": ["任务目标"],
+    "recommended": ["现有资料"]
+  },
+  "outputSchema": {
+    "artifacts": ["行业任务结果.md", "proof-of-done.json"]
+  },
+  "trust": {
+    "level": "local-generated",
+    "signed": false
+  },
+  "interoperability": {
+    "taskContract": "1.0",
+    "artifactContract": "1.0",
+    "a2aAdapter": false
+  }
+}

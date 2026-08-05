@@ -227,6 +227,33 @@ public sealed class ConversationHistoryService
         => Load(taskId).Count(turn =>
             turn.Role.Equals("assistant", StringComparison.OrdinalIgnoreCase));
 
+    public async Task<bool> DeleteAsync(
+        string taskId,
+        CancellationToken cancellationToken = default)
+    {
+        var path = GetPath(taskId);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var deleted = false;
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+                deleted = true;
+            }
+            var temporaryPath = path + ".tmp";
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+            return deleted;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     private static string StripDeliveryPassport(string content)
     {
         var marker = content.IndexOf(

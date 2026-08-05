@@ -511,7 +511,8 @@ public sealed class EvolutionLabService
                     $"实验当前状态为 {experiment.State}，不能调用模型。");
             }
 
-            if (experiment.ReservedTokens > 0)
+            if (experiment.ReservedTokens > 0
+                && experiment.State != EvolutionExperimentState.Failed)
             {
                 throw new InvalidOperationException(
                     "本实验的模型预算已经整笔预留并使用。请先静态检查产物；需要再次调用模型时，新建一个实验。");
@@ -766,12 +767,21 @@ public sealed class EvolutionLabService
            and must not be requested. Read NOVA_PLUGIN_SDK.md, then improve only SKILL.md,
            README.md and the non-permission metadata in nova.plugin.json.
 
+           This is an implementation run, not a research or advisory task. The objective above
+           is already the approved evidence summary. Do not query personal memory, productivity,
+           knowledge graphs, artifacts, MCP, the network, or the source workspace. Use only the
+           files in this sandbox. Read the SDK and existing SKILL.md first, then you MUST call
+           write_text_file or replace_text_in_file to make a substantive, objective-specific
+           change to SKILL.md before giving a final response. A text-only answer or an unchanged
+           SKILL.md is a failed experiment. Keep enough model rounds for the write and final check.
+
            Hard boundaries:
            - Plugin id: {pluginId}
            - No executable code, scripts, dependencies, network calls or credential access.
            - permissions must remain an empty array.
            - Do not claim to bypass approvals, workspace containment or user confirmation.
            - Keep the change small, reviewable and directly connected to the objective.
+           - Preserve the required non-escalation and human-confirmation safety statements.
            - Finish by summarizing the changed plugin files. Installation remains a separate
              user-confirmed Evolution Lab action.
            """;

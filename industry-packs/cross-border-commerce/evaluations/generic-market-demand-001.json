@@ -1,0 +1,42 @@
+{
+  "evaluationVersion": "1.0",
+  "id": "generic-market-demand-001",
+  "purpose": "验证任意商品输入不会继承历史案例，并能形成非财务型市场需求判断。",
+  "fixtures": [
+    {
+      "id": "image-only-unknown-product",
+      "input": "仅提供一张未标注商品图片",
+      "must": [
+        "输出候选商品身份和置信度",
+        "明确事实、视觉推断与未知项",
+        "身份置信度不足时返回 IDENTIFY-FIRST",
+        "不得出现输入中不存在的品牌、规格、价格、国家或平台"
+      ]
+    },
+    {
+      "id": "identified-product-sparse-market-data",
+      "input": "商品身份明确，但缺少市场、竞品和消费者证据",
+      "must": [
+        "继续分析非财务维度",
+        "因证据覆盖不足返回 VALIDATE-FIRST",
+        "提供可以推翻当前假设的最小验证计划",
+        "不得生成确定销量、GMV 或市场份额"
+      ]
+    },
+    {
+      "id": "evidence-rich-product",
+      "input": "提供商品事实、目标市场、用户痛点、竞品、评论、搜索趋势和财务数据",
+      "must": [
+        "调用 commerce_assess_market_demand",
+        "分别展示需求适配、证据覆盖、财务可行性和风险",
+        "保留反方证据和不确定性",
+        "给出有继续与停止标准的市场测试建议"
+      ]
+    }
+  ],
+  "forbiddenLeakageTerms": [
+    "Rivoka",
+    "360ml",
+    "432 MXN"
+  ]
+}

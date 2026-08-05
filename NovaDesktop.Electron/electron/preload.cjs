@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld("nova", {
     getTask: (request) => invoke("nova:get-task", request),
     archiveTask: (request) => invoke("nova:archive-task", request),
     restoreTask: (request) => invoke("nova:restore-task", request),
+    deleteArchivedTask: (request) => invoke("nova:delete-archived-task", request),
+    readDeliveryArtifact: (request) => invoke("nova:read-delivery-artifact", request),
     selectWorkspace: () => invoke("nova:select-workspace"),
     selectAttachments: () => invoke("nova:select-attachments"),
     desktopSnapshot: () => invoke("nova:desktop-snapshot")
@@ -30,7 +32,37 @@ contextBridge.exposeInMainWorld("nova", {
     setSkillEnabled: (request) => invoke("nova:set-skill-enabled", request),
     install: (request) => invoke("nova:install-capability", request),
     searchStore: (request) => invoke("nova:search-capability-store", request),
-    installStore: (request) => invoke("nova:install-store-capability", request)
+    installStore: (request) => invoke("nova:install-store-capability", request),
+    discoverMcp: (request) => invoke("nova:discover-mcp", request),
+    previewMcpConfig: (request) => invoke("nova:preview-mcp-config", request),
+    importDiscoveredMcp: (request) => invoke("nova:import-discovered-mcp", request)
+  },
+  agentPacks: {
+    list: () => invoke("nova:list-agent-packs"),
+    get: (request) => invoke("nova:get-agent-pack", request),
+    listCreationTemplates: () => invoke("nova:list-agent-creation-templates"),
+    recommend: (request) => invoke("nova:recommend-agent-pack", request),
+    getDesignSession: () => invoke("nova:get-agent-workshop-session"),
+    orchestrate: (request) => invoke("nova:orchestrate-agent-pack", request),
+    cancelOrchestration: () => invoke("nova:cancel-agent-pack-orchestration"),
+    create: (request) => invoke("nova:create-agent-pack", request),
+    onOrchestrationEvent: (listener) => {
+      const handler = (_event, payload) => listener(payload);
+      ipcRenderer.on("nova:agent-workshop-event", handler);
+      return () => ipcRenderer.removeListener("nova:agent-workshop-event", handler);
+    },
+    onOrchestrationReady: (listener) => {
+      const handler = (_event, payload) => listener(payload);
+      ipcRenderer.on("nova:agent-workshop-ready", handler);
+      return () => ipcRenderer.removeListener("nova:agent-workshop-ready", handler);
+    },
+    listCalibrations: (request) => invoke("nova:list-agent-calibrations", request),
+    createCalibration: (request) => invoke("nova:create-agent-calibration", request),
+    rollbackCalibration: (request) => invoke("nova:rollback-agent-calibration", request),
+    getCapabilities: (request) => invoke("nova:get-agent-pack-capabilities", request),
+    install: () => invoke("nova:install-agent-pack"),
+    setEnabled: (request) => invoke("nova:set-agent-pack-enabled", request),
+    remove: (request) => invoke("nova:remove-agent-pack", request)
   },
   extensions: {
     listProfiles: () => invoke("nova:list-extension-profiles"),
@@ -56,6 +88,11 @@ contextBridge.exposeInMainWorld("nova", {
       ipcRenderer.on("nova:evolution-event", handler);
       return () => ipcRenderer.removeListener("nova:evolution-event", handler);
     }
+  },
+  knowledge: {
+    getState: (request) => invoke("nova:get-knowledge-state", request),
+    indexWorkspace: (request) => invoke("nova:index-workspace-knowledge", request),
+    search: (request) => invoke("nova:search-workspace-knowledge", request)
   },
   window: {
     minimize: () => invoke("nova:window-minimize"),

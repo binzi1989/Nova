@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nova.local/schemas/nova.industry.v1.json",
+  "title": "NOVA Agent Pack Manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "manifestVersion",
+    "id",
+    "name",
+    "version",
+    "description",
+    "entryWorkflow"
+  ],
+  "properties": {
+    "manifestVersion": { "const": "1.0" },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{2,79}$" },
+    "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$" },
+    "status": { "enum": ["incubating", "preview", "stable", "deprecated"] },
+    "category": { "type": "string", "maxLength": 80 },
+    "description": { "type": "string", "minLength": 10, "maxLength": 500 },
+    "novaCompatibility": { "type": "string", "maxLength": 80 },
+    "declaredCapabilities": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "type": "string", "maxLength": 100 }
+    },
+    "permissions": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "type": "string", "maxLength": 100 }
+    },
+    "starterPrompts": {
+      "type": "array",
+      "maxItems": 12,
+      "items": { "type": "string", "maxLength": 240 }
+    },
+    "capabilityRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "items"],
+      "properties": {
+        "version": { "const": "1.0" },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "kind", "name", "reason", "required", "matchIds"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,39}$" },
+              "kind": { "enum": ["mcp", "skill"] },
+              "name": { "type": "string", "minLength": 2, "maxLength": 100 },
+              "reason": { "type": "string", "minLength": 4, "maxLength": 500 },
+              "required": { "type": "boolean" },
+              "matchIds": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 12,
+                "items": { "type": "string", "minLength": 1, "maxLength": 100 }
+              },
+              "catalogId": { "type": "string", "minLength": 1, "maxLength": 100 }
+            }
+          }
+        }
+      }
+    },
+    "onboarding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "headline", "description", "steps", "outcomes"],
+      "properties": {
+        "version": { "const": "1.0" },
+        "headline": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "description": { "type": "string", "minLength": 10, "maxLength": 600 },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "title", "description", "kind", "required", "placeholder", "options", "whyItMatters", "example"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,39}$" },
+              "title": { "type": "string", "minLength": 2, "maxLength": 80 },
+              "description": { "type": "string", "minLength": 2, "maxLength": 500 },
+              "kind": { "enum": ["text", "select", "attachment"] },
+              "required": { "type": "boolean" },
+              "placeholder": { "type": "string", "maxLength": 240 },
+              "options": {
+                "type": "array",
+                "maxItems": 12,
+                "items": { "type": "string", "maxLength": 100 }
+              },
+              "whyItMatters": { "type": "string", "minLength": 2, "maxLength": 500 },
+              "example": { "type": "string", "maxLength": 500 }
+            }
+          }
+        },
+        "outcomes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "title", "description", "promptTemplate"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,39}$" },
+              "title": { "type": "string", "minLength": 2, "maxLength": 80 },
+              "description": { "type": "string", "minLength": 2, "maxLength": 300 },
+              "promptTemplate": { "type": "string", "minLength": 10, "maxLength": 4000 }
+            }
+          }
+        }
+      }
+    },
+    "creationStandard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "scenarioProfile", "autonomyLevel", "lifecycle", "collaborationMode", "deliveryMode", "decisionStyle"],
+      "properties": {
+        "version": { "const": "1.0" },
+        "scenarioProfile": { "enum": ["research", "decision", "content", "engineering", "operation", "data", "service", "monitoring", "compliance", "orchestration"] },
+        "autonomyLevel": { "enum": ["assist", "approval-execute", "goal-autonomous"] },
+        "lifecycle": { "enum": ["single-run", "project", "continuous", "scheduled"] },
+        "collaborationMode": { "enum": ["independent", "specialist-team", "coordinator"] },
+        "deliveryMode": { "enum": ["conversation", "document", "data", "code", "operation", "mixed"] },
+        "decisionStyle": { "enum": ["conservative", "balanced", "exploratory", "creative", "compliance-first"] }
+      }
+    },
+    "inputContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "recommended", "missingDataPolicy"],
+      "properties": {
+        "required": { "type": "array", "maxItems": 12, "items": { "type": "string", "minLength": 1, "maxLength": 120 } },
+        "recommended": { "type": "array", "maxItems": 12, "items": { "type": "string", "minLength": 1, "maxLength": 120 } },
+        "missingDataPolicy": { "enum": ["preserve-unknowns-and-lower-confidence", "block-until-complete"] }
+      }
+    },
+    "outputContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primaryArtifact", "mustPersist", "evidenceRequired", "proofOfDoneRequired"],
+      "properties": {
+        "primaryArtifact": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "mustPersist": { "type": "boolean" },
+        "evidenceRequired": { "type": "boolean" },
+        "proofOfDoneRequired": { "type": "boolean" }
+      }
+    },
+    "calibrationContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scopes", "patchOnly", "regressionRequired", "rollbackRequired"],
+      "properties": {
+        "scopes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "enum": ["turn", "project", "agent", "organization"] }
+        },
+        "patchOnly": { "type": "boolean" },
+        "regressionRequired": { "type": "boolean" },
+        "rollbackRequired": { "type": "boolean" }
+      }
+    },
+    "collaborationContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "typedDelegationRequired", "artifactHandoffRequired", "maxDelegationDepth"],
+      "properties": {
+        "mode": { "enum": ["independent", "specialist-team", "coordinator"] },
+        "typedDelegationRequired": { "type": "boolean" },
+        "artifactHandoffRequired": { "type": "boolean" },
+        "maxDelegationDepth": { "type": "integer", "minimum": 0, "maximum": 4 }
+      }
+    },
+    "externalActions": {
+      "type": "object",
+      "additionalProperties": {
+        "enum": ["not-supported", "approval-required", "allowed-within-task"]
+      }
+    },
+    "entryWorkflow": { "type": "string", "pattern": "^workflows/.+\\.json$" },
+    "evaluationSuite": { "type": "string", "pattern": "^evaluations/.+\\.json$" }
+  }
+}

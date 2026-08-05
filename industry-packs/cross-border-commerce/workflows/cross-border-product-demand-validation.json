@@ -1,0 +1,110 @@
+{
+  "workflowVersion": "3.0",
+  "id": "cross-border-product-demand-validation",
+  "name": "跨境商品识别、需求预判与市场验证",
+  "executionMode": "goal",
+  "resultContract": "delivery-templates/market-demand-decision-brief.md",
+  "steps": [
+    {
+      "id": "neutral-identification",
+      "agent": "商品识别员",
+      "title": "中立识别商品与候选品类",
+      "dependsOn": [],
+      "outputs": ["商品识别卡.json", "待确认问题.json"],
+      "acceptance": [
+        "只依据本轮图片、文字和可核实来源识别商品",
+        "不得套用历史案例中的品牌、品类、规格、市场或售价",
+        "不能唯一识别时列出候选解释、置信度和最小确认问题",
+        "图片不可见或信息不足时明确降级为待识别"
+      ]
+    },
+    {
+      "id": "freeze-passport",
+      "agent": "商品档案官",
+      "title": "冻结商品事实、推断与未知项",
+      "dependsOn": ["neutral-identification"],
+      "outputs": ["商品档案.json", "关键未知项.json"],
+      "acceptance": [
+        "已调用 commerce_normalize_product_passport",
+        "事实、推断和未知项严格分离",
+        "未确认规格不得进入广告承诺"
+      ]
+    },
+    {
+      "id": "market-evidence",
+      "agent": "需求研究员",
+      "title": "采集需求、竞品、用户痛点与本地场景证据",
+      "dependsOn": ["freeze-passport"],
+      "outputs": ["市场证据账本.json", "用户痛点地图.json", "竞品空位图.json"],
+      "acceptance": [
+        "已调用 commerce_build_evidence_ledger",
+        "需求证据同时覆盖消费者问题、使用频率、市场活动、竞品和本地适配",
+        "每个易变结论带来源与日期",
+        "不把搜索结果数、评论数或页面排序直接解释成销量"
+      ]
+    },
+    {
+      "id": "demand-fit",
+      "agent": "市场适配分析师",
+      "title": "评估商品与目标市场的需求适配度",
+      "dependsOn": ["market-evidence"],
+      "outputs": ["需求适配评分.json", "需求假设清单.json"],
+      "acceptance": [
+        "已调用 commerce_assess_market_demand",
+        "覆盖痛点强度、人群范围、使用频率、市场活动、竞争空间、差异化、内容可演示性、本地适配和风险",
+        "分数同时显示证据覆盖率与不确定性惩罚",
+        "不给出确定销量、GMV 或必然成功承诺"
+      ]
+    },
+    {
+      "id": "commercial-viability",
+      "agent": "利润与履约分析师",
+      "title": "补充验证利润、履约与售后可行性",
+      "dependsOn": ["freeze-passport", "market-evidence"],
+      "outputs": ["落地利润情景.json", "履约风险清单.json"],
+      "acceptance": [
+        "成本充分时调用 commerce_calculate_landed_profit",
+        "成本缺失时保留为待验证条件，不阻断非财务需求分析",
+        "明确物流、退货、合规与售后风险"
+      ]
+    },
+    {
+      "id": "validation-plan",
+      "agent": "增长实验设计师",
+      "title": "设计最小成本市场验证实验",
+      "dependsOn": ["demand-fit", "commercial-viability"],
+      "outputs": ["最小验证计划.md", "测试素材方向.json"],
+      "acceptance": [
+        "优先验证最可能推翻结论的高风险假设",
+        "每个实验包含对象、渠道、信号、预算上限、继续标准和停止标准",
+        "区分点击兴趣、购买意向与真实成交，不用虚荣指标替代需求"
+      ]
+    },
+    {
+      "id": "decision-gate",
+      "agent": "选品决策官",
+      "title": "形成进入、试验、补证或暂缓建议",
+      "dependsOn": ["demand-fit", "commercial-viability", "validation-plan"],
+      "outputs": ["市场进入建议.md"],
+      "acceptance": [
+        "结论为 GO-TO-TEST、CONDITIONAL-TEST、VALIDATE-FIRST、IDENTIFY-FIRST 或 NO-GO-FOR-NOW",
+        "建议明确区分已证实事实、推理链、反方理由和未知项",
+        "需求适配与财务可行性分别展示后再综合判断",
+        "给出下一步最小动作而不是泛泛建议"
+      ]
+    },
+    {
+      "id": "proof-of-done",
+      "agent": "交付审计员",
+      "title": "审查证据边界并组装决策包",
+      "dependsOn": ["decision-gate"],
+      "outputs": ["跨境商品市场判断.md", "完成证据.json"],
+      "acceptance": [
+        "首页先展示建议、需求适配、证据健康度、主要风险与下一步",
+        "交付物可在 NOVA 窗体内独立审查",
+        "来源、事实、推断、未知项和反方证据均可追溯",
+        "不存在由历史样例泄漏形成的产品预设"
+      ]
+    }
+  ]
+}

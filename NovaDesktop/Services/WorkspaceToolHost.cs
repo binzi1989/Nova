@@ -46,6 +46,7 @@ public sealed class WorkspaceToolHost
     private readonly AgentScheduleService _scheduleService;
     private readonly EngineeringEvidenceLedgerService? _evidenceLedger;
     private readonly SideEffectReceiptService _sideEffectReceipts;
+    private readonly CrossBorderCommerceToolService _commerceTools = new();
     private readonly string _taskId;
     private readonly IReadOnlyList<string>? _allowedWriteScopes;
     private readonly TextPatchPreviewService _patchPreview = new();
@@ -64,7 +65,8 @@ public sealed class WorkspaceToolHost
         EngineeringEvidenceLedgerService? evidenceLedger = null,
         string? taskId = null,
         IReadOnlyList<string>? allowedWriteScopes = null,
-        SideEffectReceiptService? sideEffectReceipts = null)
+        SideEffectReceiptService? sideEffectReceipts = null,
+        string? agentPackId = null)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _workspacePrefix = _workspaceRoot.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
@@ -86,6 +88,7 @@ public sealed class WorkspaceToolHost
         Definitions =
         [
             .. CreateWorkspaceDefinitions(),
+            .. CrossBorderCommerceToolService.CreateDefinitions(agentPackId),
             Function(
                 "recommend_task_capabilities",
                 "Analyze the current goal and workspace, then rank only relevant MCP and Skill capabilities. This is read-only and never enables or installs anything.",
@@ -932,6 +935,12 @@ public sealed class WorkspaceToolHost
                 "disable_scheduled_task" => await _scheduleService.DisableAsync(
                     RequireString(arguments, "id"),
                     cancellationToken),
+                "commerce_normalize_product_passport"
+                    or "commerce_calculate_landed_profit"
+                    or "commerce_build_evidence_ledger"
+                    or "commerce_assess_market_demand" => _commerceTools.Execute(
+                        toolName,
+                        arguments),
                 _ => JsonSerializer.Serialize(new { error = $"Unknown tool: {toolName}" })
             };
             actionReturned = true;

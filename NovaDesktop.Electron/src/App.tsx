@@ -4,6 +4,7 @@ import {
   Bot,
   Boxes,
   BrainCircuit,
+  BookOpen,
   Check,
   ChevronDown,
   Circle,
@@ -20,6 +21,7 @@ import {
   Paperclip,
   Plus,
   RefreshCw,
+  Search,
   Send,
   Settings2,
   ShieldCheck,
@@ -27,6 +29,7 @@ import {
   Sparkles,
   Square,
   Terminal,
+  Trash2,
   X,
   Zap
 } from "lucide-react";
@@ -34,25 +37,45 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
+  AgentPackDetails,
+  AgentCreationTemplate,
+  AgentPackCreationRequest,
+  AgentPackCreationResult,
+  AgentWorkshopRecommendation,
+  AgentWorkshopDesignSession,
+  AgentWorkshopOrchestrationDraft,
+  AgentWorkshopOrchestrationEvent,
+  AgentWorkshopReadyEvent,
+  AgentCalibrationPatch,
+  AgentCalibrationSnapshot,
+  AgentPackCapabilityReport,
+  AgentPackSummary,
   AgentEvent,
   AgentTask,
   Attachment,
   BootInfo,
   CapabilityState,
   DesktopSnapshot,
+  DeliveryArtifactPreview,
   EvolutionDiscoveryEvent,
   EvolutionLabState,
+  KnowledgeSearchResult,
+  KnowledgeState,
   LivingMemoryState,
   ExecutionMode,
   Message,
+  McpDiscoveryCandidate,
+  McpDiscoveryResult,
   Provider,
   StoreCapabilityItem
 } from "./types";
 
 type SettingsSection =
+  | "agents"
   | "model"
   | "mcp"
   | "skills"
+  | "knowledge"
   | "ssh"
   | "cloud"
   | "plugins"
@@ -92,6 +115,53 @@ const executionModeLabels: Record<ExecutionMode, { label: string; detail: string
   Build: { label: "构建", detail: "修改并验证" },
   Autopilot: { label: "Agent", detail: "自主拆解并行" },
   Goal: { label: "目标", detail: "自主探索结果" }
+};
+
+type AgentWorkshopForm = Omit<
+  AgentPackCreationRequest,
+  "requiredInputs" | "recommendedInputs" | "starterPrompts"
+>;
+
+function generateAgentId() {
+  const token = typeof globalThis.crypto?.randomUUID === "function"
+    ? globalThis.crypto.randomUUID().replaceAll("-", "").slice(0, 16)
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+  return `nova.user.agent-${token.toLowerCase()}`;
+}
+
+function createInitialAgentWorkshopForm(): AgentWorkshopForm {
+  return {
+    id: generateAgentId(),
+    name: "",
+    category: "",
+    description: "",
+    objective: "",
+    scenarioProfile: "research",
+    autonomyLevel: "assist",
+    lifecycle: "single-run",
+    collaborationMode: "independent",
+    deliveryMode: "document",
+    decisionStyle: "balanced",
+    primaryArtifact: "研究分析报告.md"
+  };
+}
+
+const calibrationCategoryLabels: Record<AgentCalibrationPatch["category"], string> = {
+  fact: "事实不对",
+  judgment: "判断偏差",
+  workflow: "流程缺步",
+  format: "格式不适合",
+  evidence: "证据不足",
+  permission: "权限方式",
+  tone: "表达语气",
+  other: "其他纠正"
+};
+
+const calibrationScopeLabels: Record<AgentCalibrationPatch["scope"], string> = {
+  turn: "仅当前任务",
+  project: "当前项目",
+  agent: "该 Agent",
+  organization: "组织版本（本机）"
 };
 
 function now() {
@@ -209,6 +279,58 @@ function parseChoices(content: string) {
   return { display: display || content, choices };
 }
 
+function parseDeliveryPresentation(content: string) {
+  const metrics: Array<{ label: string; value: string }> = [];
+  const artifacts: Array<{ label: string; path: string }> = [];
+  let outcome: { verdict: string; reason: string } | null = null;
+  let nextAction = "";
+
+  const display = content
+    .replace(
+      /^\s*\[\[NOVA_OUTCOME\|([^|\]\r\n]{1,40})\|([^\]\r\n]{1,600})\]\]\s*$/gm,
+      (_line, verdict: string, reason: string) => {
+        outcome = { verdict: verdict.trim(), reason: reason.trim() };
+        return "";
+      }
+    )
+    .replace(
+      /^\s*\[\[NOVA_METRIC\|([^|\]\r\n]{1,80})\|([^\]\r\n]{1,120})\]\]\s*$/gm,
+      (_line, label: string, value: string) => {
+        metrics.push({ label: label.trim(), value: value.trim() });
+        return "";
+      }
+    )
+    .replace(
+      /^\s*\[\[NOVA_ARTIFACT\|([^|\]\r\n]{1,80})\|([^\]\r\n]{1,500})\]\]\s*$/gm,
+      (_line, label: string, path: string) => {
+        artifacts.push({ label: label.trim(), path: path.trim() });
+        return "";
+      }
+    )
+    .replace(
+      /^\s*\[\[NOVA_NEXT\|([^\]\r\n]{1,600})\]\]\s*$/gm,
+      (_line, value: string) => {
+        nextAction = value.trim();
+        return "";
+      }
+    )
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  if (!outcome) {
+    const verdict = content.match(/\b(CONDITIONAL\s+GO|NO[- ]GO|GO)\b/i)?.[1];
+    if (verdict) outcome = { verdict: verdict.toUpperCase(), reason: "查看完整交付说明了解裁决依据" };
+  }
+
+  return {
+    display,
+    outcome,
+    metrics: metrics.slice(0, 6),
+    artifacts: artifacts.slice(0, 12),
+    nextAction
+  };
+}
+
 function prepareMarkdown(content: string) {
   return content
     .replace(/^\s*#{7,}\s+/gm, "###### ")
@@ -254,6 +376,48 @@ function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("model");
   const [capabilities, setCapabilities] = useState<CapabilityState | null>(null);
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
+  const [knowledgeState, setKnowledgeState] = useState<KnowledgeState | null>(null);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
+  const [knowledgeQuery, setKnowledgeQuery] = useState("");
+  const [knowledgeResults, setKnowledgeResults] = useState<KnowledgeSearchResult[]>([]);
+  const [agentPacks, setAgentPacks] = useState<AgentPackSummary[]>([]);
+  const [agentPacksLoading, setAgentPacksLoading] = useState(false);
+  const [agentCreationTemplates, setAgentCreationTemplates] =
+    useState<AgentCreationTemplate[]>([]);
+  const [agentWorkshopOpen, setAgentWorkshopOpen] = useState(false);
+  const [agentCreating, setAgentCreating] = useState(false);
+  const [agentBuildError, setAgentBuildError] = useState("");
+  const [agentOrchestrating, setAgentOrchestrating] = useState(false);
+  const [agentCreationResult, setAgentCreationResult] =
+    useState<AgentPackCreationResult | null>(null);
+  const [agentWorkshopForm, setAgentWorkshopForm] =
+    useState<AgentWorkshopForm>(createInitialAgentWorkshopForm);
+  const [agentWorkshopRecommendation, setAgentWorkshopRecommendation] =
+    useState<AgentWorkshopRecommendation | null>(null);
+  const [agentRecommendationLoading, setAgentRecommendationLoading] = useState(false);
+  const [agentOrchestrationDraft, setAgentOrchestrationDraft] =
+    useState<AgentWorkshopOrchestrationDraft | null>(null);
+  const [agentOrchestrationEvents, setAgentOrchestrationEvents] =
+    useState<AgentWorkshopOrchestrationEvent[]>([]);
+  const [agentDesignSession, setAgentDesignSession] =
+    useState<AgentWorkshopDesignSession | null>(null);
+  const [agentCalibration, setAgentCalibration] =
+    useState<AgentCalibrationSnapshot | null>(null);
+  const [selectedAgentPackId, setSelectedAgentPackId] = useState<string | null>(null);
+  const [inspectedAgentPack, setInspectedAgentPack] = useState<AgentPackDetails | null>(null);
+  const [agentLaunchGuide, setAgentLaunchGuide] = useState<AgentPackDetails | null>(null);
+  const [agentLaunchOpen, setAgentLaunchOpen] = useState(false);
+  const [agentLaunchValues, setAgentLaunchValues] = useState<Record<string, string>>({});
+  const [agentLaunchError, setAgentLaunchError] = useState("");
+  const [agentCapabilityReport, setAgentCapabilityReport] =
+    useState<AgentPackCapabilityReport | null>(null);
+  const [mcpDiscovery, setMcpDiscovery] = useState<McpDiscoveryResult | null>(null);
+  const [selectedMcpCandidates, setSelectedMcpCandidates] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [capabilityPreparing, setCapabilityPreparing] = useState(false);
+  const [mcpConfigText, setMcpConfigText] = useState("");
+  const [mcpAuthorizationEnvironment, setMcpAuthorizationEnvironment] = useState("");
   const [livingMemory, setLivingMemory] = useState<LivingMemoryState | null>(null);
   const [evolutionLab, setEvolutionLab] = useState<EvolutionLabState | null>(null);
   const [evolutionObjective, setEvolutionObjective] = useState("");
@@ -280,17 +444,37 @@ function App() {
     cloud: Array<Record<string, string | number>>;
   }>({ ssh: [], cloud: [] });
   const [apiKey, setApiKey] = useState("");
-  const [running, setRunning] = useState(false);
+  const [runningTaskIds, setRunningTaskIds] = useState<Set<string>>(
+    () => new Set()
+  );
   const [streamingText, setStreamingText] = useState("");
   const [runtimePulse, setRuntimePulse] = useState("正在建立模型连接");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const running = selectedTaskId ? runningTaskIds.has(selectedTaskId) : false;
   const [pendingArchiveTask, setPendingArchiveTask] = useState<AgentTask | null>(null);
+  const [pendingDeleteTask, setPendingDeleteTask] = useState<AgentTask | null>(null);
   const [archiveLibraryOpen, setArchiveLibraryOpen] = useState(false);
+  const [deliveryReview, setDeliveryReview] = useState<{
+    title: string;
+    path?: string;
+    content: string;
+    kind: "markdown" | "text";
+    truncated?: boolean;
+  } | null>(null);
+  const [deliveryReviewLoading, setDeliveryReviewLoading] = useState(false);
+  const [deliveryReviewNote, setDeliveryReviewNote] = useState("");
+  const [deliveryReviewMode, setDeliveryReviewMode] =
+    useState<"rework" | "calibrate">("rework");
+  const [calibrationCategory, setCalibrationCategory] =
+    useState<AgentCalibrationPatch["category"]>("judgment");
+  const [calibrationScope, setCalibrationScope] =
+    useState<AgentCalibrationPatch["scope"]>("turn");
   const [pendingSubmission, setPendingSubmission] =
     useState<PendingSubmission | null>(null);
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [queuedCorrection, setQueuedCorrection] =
     useState<PendingSubmission | null>(null);
+  const [leftOpen, setLeftOpen] = useState(() => window.innerWidth > 1180);
   const [rightOpen, setRightOpen] = useState(true);
   const [notice, setNotice] = useState("正在唤醒 AgentOS…");
   const [activity, setActivity] = useState<
@@ -310,7 +494,9 @@ function App() {
   const [planTitle, setPlanTitle] = useState("执行计划");
   const [taskPlan, setTaskPlan] = useState<PlanStep[]>([]);
   const threadEnd = useRef<HTMLDivElement>(null);
-  const activeRunId = useRef<string | null>(null);
+  const selectedTaskIdRef = useRef<string | null>(null);
+  const agentWorkshopSessionIdRef = useRef<string | null>(null);
+  const taskRunIds = useRef<Map<string, string>>(new Map());
   const streamBuffer = useRef("");
   const streamFlushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRuntimeEventAt = useRef(Date.now());
@@ -335,6 +521,34 @@ function App() {
       ),
     [connected, provider]
   );
+  const selectedAgentPack = useMemo(
+    () => agentPacks.find((pack) => pack.id === selectedAgentPackId) || null,
+    [agentPacks, selectedAgentPackId]
+  );
+
+  useEffect(() => {
+    if (!settingsOpen || settingsSection !== "agents" || !agentWorkshopOpen) return;
+    let cancelled = false;
+    setAgentRecommendationLoading(true);
+    const timer = setTimeout(() => {
+      void window.nova.agentPacks.recommend({
+        ...agentWorkshopForm,
+        requiredInputs: [],
+        recommendedInputs: [],
+        starterPrompts: []
+      }).then((recommendation) => {
+        if (!cancelled) setAgentWorkshopRecommendation(recommendation);
+      }).catch(() => {
+        if (!cancelled) setAgentWorkshopRecommendation(null);
+      }).finally(() => {
+        if (!cancelled) setAgentRecommendationLoading(false);
+      });
+    }, 320);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [agentWorkshopForm, agentWorkshopOpen, settingsOpen, settingsSection]);
 
   async function refreshTasks() {
     const result = await window.nova.system.listTasks();
@@ -363,10 +577,115 @@ function App() {
     addActivity("任务已恢复", task.title || task.id, "done");
   }
 
+  async function deleteArchivedTask(task: AgentTask) {
+    await window.nova.system.deleteArchivedTask({ taskId: task.id });
+    setPendingDeleteTask(null);
+    await refreshArchivedTasks();
+    setNotice(`“${task.title || "未命名任务"}”的对话与任务索引已永久删除，工作区文件和交付物仍保留。`);
+    addActivity("归档记录已删除", task.title || task.id, "done");
+  }
+
+  async function openDeliveryArtifact(
+    artifact: { label: string; path: string }
+  ) {
+    setDeliveryReviewLoading(true);
+    setDeliveryReviewNote("");
+    setDeliveryReviewMode("rework");
+    try {
+      const preview: DeliveryArtifactPreview =
+        await window.nova.system.readDeliveryArtifact({
+          path: artifact.path,
+          workspace
+        });
+      setDeliveryReview({
+        title: artifact.label || preview.name,
+        path: preview.path,
+        content: preview.content,
+        kind: preview.kind,
+        truncated: preview.truncated
+      });
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "交付文件预览失败");
+    } finally {
+      setDeliveryReviewLoading(false);
+    }
+  }
+
+  function openDeliverySummary(title: string, content: string) {
+    setDeliveryReviewNote("");
+    setDeliveryReviewMode("rework");
+    setDeliveryReview({ title, content, kind: "markdown" });
+  }
+
+  function queueDeliveryRework() {
+    if (!deliveryReview) return;
+    const subject = deliveryReview.path
+      ? `交付文件 ${deliveryReview.path}`
+      : `本轮交付“${deliveryReview.title}”`;
+    const note = deliveryReviewNote.trim() || "请进一步检查完整性、清晰度与可直接使用程度，并修正发现的问题。";
+    setDraft(`请继续加工${subject}。\n\n审查意见：${note}\n\n保留已经验证通过的内容，只修改不满足项，完成后重新给出可核验交付。`);
+    setDeliveryReview(null);
+    setDeliveryReviewNote("");
+    setNotice("审查意见已放入输入框，可继续补充后提交。");
+  }
+
+  async function saveAgentCalibration() {
+    if (!deliveryReview || !selectedAgentPackId) return;
+    const instruction = deliveryReviewNote.trim();
+    if (instruction.length < 4) {
+      setNotice("请先描述 Agent 哪个地方不合适，以及以后应该怎样处理。");
+      return;
+    }
+    try {
+      const snapshot = await window.nova.agentPacks.createCalibration({
+        packId: selectedAgentPackId,
+        scope: calibrationScope,
+        category: calibrationCategory,
+        instruction,
+        taskId: selectedTaskId,
+        workspaceRoot: workspace,
+        sourceTitle: deliveryReview.title,
+        sourcePath: deliveryReview.path || null
+      });
+      setAgentCalibration(snapshot);
+      const subject = deliveryReview.path
+        ? `交付文件 ${deliveryReview.path}`
+        : `本轮交付“${deliveryReview.title}”`;
+      setDraft(
+        `请根据刚刚保存的 Agent 校准规则继续加工${subject}。\n\n本次纠正：${instruction}\n\n保留已经验证通过的内容，只修改不满足项，并重新给出可核验交付。`
+      );
+      setDeliveryReview(null);
+      setDeliveryReviewNote("");
+      setDeliveryReviewMode("rework");
+      setNotice(
+        `校准 v${snapshot.version} 已保存到“${calibrationScopeLabels[calibrationScope]}”，下一轮会自动生效。`
+      );
+    } catch (error) {
+      setNotice(`Agent 校准没有保存：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async function rollbackAgentCalibration(patch: AgentCalibrationPatch) {
+    try {
+      const snapshot = await window.nova.agentPacks.rollbackCalibration({
+        packId: patch.packId,
+        patchId: patch.id
+      });
+      setAgentCalibration(snapshot);
+      setNotice(
+        patch.state === "active"
+          ? `校准 v${patch.version} 已回滚，原始 Agent Pack 没有被修改。`
+          : `校准 v${patch.version} 已重新启用。`
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "校准状态更新失败");
+    }
+  }
+
   async function openTask(task: AgentTask) {
-    if (running) return;
     try {
       const recovered = await window.nova.system.getTask({ taskId: task.id });
+      selectedTaskIdRef.current = task.id;
       setSelectedTaskId(task.id);
       setWorkspace(recovered.task.workspaceRoot || workspace);
       if (recovered.task.provider && recovered.task.provider in providerLabels) {
@@ -376,6 +695,7 @@ function App() {
       }
       const recoveredMode = parseExecutionMode(recovered.task.executionMode);
       if (recoveredMode) setExecutionMode(recoveredMode);
+      setSelectedAgentPackId(recovered.task.agentPackId || null);
       setMessages(
         recovered.messages.map((message) => ({
           ...message,
@@ -387,6 +707,7 @@ function App() {
       );
       setNotice("已恢复任务上下文，可以继续追问或修改方向");
       addActivity("任务已恢复", task.title, "done");
+      if (window.innerWidth <= 1180) setLeftOpen(false);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "任务恢复失败");
     }
@@ -395,12 +716,391 @@ function App() {
   async function loadCapabilities() {
     setCapabilitiesLoading(true);
     try {
-      setCapabilities(await window.nova.capabilities.list({ workspace }));
+      const state = await window.nova.capabilities.list({ workspace });
+      setCapabilities(state);
+      return state;
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "能力状态读取失败");
+      return null;
     } finally {
       setCapabilitiesLoading(false);
     }
+  }
+
+  async function loadKnowledge() {
+    setKnowledgeLoading(true);
+    try {
+      const state = await window.nova.knowledge.getState({ workspace });
+      setKnowledgeState(state);
+      return state;
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "知识库状态读取失败");
+      return null;
+    } finally {
+      setKnowledgeLoading(false);
+    }
+  }
+
+  async function indexWorkspaceKnowledge() {
+    if (!workspace) {
+      setNotice("请先选择工作区，再建立知识索引");
+      return;
+    }
+    setKnowledgeLoading(true);
+    try {
+      const result = await window.nova.knowledge.indexWorkspace({ workspace });
+      await loadKnowledge();
+      setNotice(
+        `知识库已更新：${result.summary.indexedFiles} 个文件重建，${result.summary.reusedFiles} 个文件复用`
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "知识库索引失败");
+    } finally {
+      setKnowledgeLoading(false);
+    }
+  }
+
+  async function searchKnowledge(event?: FormEvent) {
+    event?.preventDefault();
+    const query = knowledgeQuery.trim();
+    if (!query) return;
+    setKnowledgeLoading(true);
+    try {
+      const result = await window.nova.knowledge.search({
+        workspace,
+        query,
+        maximumResults: 20
+      });
+      setKnowledgeResults(result.results);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "知识库检索失败");
+    } finally {
+      setKnowledgeLoading(false);
+    }
+  }
+
+  async function loadAgentPacks(preferredId?: string | null) {
+    setAgentPacksLoading(true);
+    try {
+      const [packs, templates] = await Promise.all([
+        window.nova.agentPacks.list(),
+        window.nova.agentPacks.listCreationTemplates()
+      ]);
+      setAgentPacks(packs);
+      setAgentCreationTemplates(templates);
+      const requestedId = preferredId ?? selectedAgentPackId;
+      if (requestedId && !packs.some((pack) => pack.id === requestedId && pack.enabled)) {
+        setSelectedAgentPackId(null);
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Agent Pack 读取失败");
+    } finally {
+      setAgentPacksLoading(false);
+    }
+  }
+
+  async function inspectAgentPack(id: string) {
+    try {
+      const [details, calibration] = await Promise.all([
+        window.nova.agentPacks.get({ id }),
+        window.nova.agentPacks.listCalibrations({ packId: id })
+      ]);
+      setInspectedAgentPack(details);
+      setAgentCalibration(calibration);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Agent Pack 详情读取失败");
+    }
+  }
+
+  async function orchestrateAgentPack(event: FormEvent) {
+    event.preventDefault();
+    if (!connected[provider]) {
+      setNotice(`请先连接 ${providerLabels[provider]}，Agent 工坊需要模型完成真实编排。`);
+      openSettings("model");
+      return;
+    }
+    setAgentOrchestrating(true);
+    setAgentOrchestrationDraft(null);
+    setAgentOrchestrationEvents([]);
+    setAgentCreationResult(null);
+    try {
+      const response = await window.nova.agentPacks.orchestrate({
+        ...agentWorkshopForm,
+        provider,
+        model
+      });
+      agentWorkshopSessionIdRef.current = response.session.id;
+      setAgentDesignSession(response.session);
+      setAgentOrchestrationEvents(response.session.events || []);
+      setNotice("真实多 Agent 已在 Agent 中心开始编排；这里完成审阅前不会创建任务空间。");
+    } catch (error) {
+      setAgentOrchestrating(false);
+      setNotice(`智能体编排失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async function createAgentPack() {
+    if (!agentOrchestrationDraft) {
+      setNotice("请先完成智能体编排并审阅草案，再生成 Agent Pack。");
+      return;
+    }
+    const approvedOrchestration: AgentWorkshopOrchestrationDraft = {
+      ...agentOrchestrationDraft,
+      reviewVerdict: "approved",
+      designRationale: [
+        ...agentOrchestrationDraft.designRationale,
+        "用户已在 Agent 中心审阅并确认本版编排草案。"
+      ]
+    };
+    setAgentBuildError("");
+    setAgentCreating(true);
+    try {
+      const response = await window.nova.agentPacks.create({
+        ...agentWorkshopForm,
+        requiredInputs: approvedOrchestration.requiredInputs,
+        recommendedInputs: approvedOrchestration.recommendedInputs,
+        starterPrompts: approvedOrchestration.starterPrompts,
+        orchestration: approvedOrchestration
+      });
+      if (response.canceled || !response.task) return;
+      const buildTask = normalizeTasks([response.task])[0];
+      setAgentCreationResult(null);
+      setAgentWorkshopOpen(false);
+      setSettingsOpen(false);
+      selectedTaskIdRef.current = buildTask.id;
+      setSelectedTaskId(buildTask.id);
+      setRunningTaskIds((current) => new Set(current).add(buildTask.id));
+      setTasks((current) => [buildTask, ...current.filter((task) => task.id !== buildTask.id)]);
+      setAgentWorkshopForm(createInitialAgentWorkshopForm());
+      agentWorkshopSessionIdRef.current = null;
+      setAgentDesignSession(null);
+      setAgentOrchestrationDraft(null);
+      setAgentOrchestrationEvents([]);
+      setPlanTitle("Agent Pack 生成与可用性验证");
+      setTaskPlan([
+        { id: "lock", title: "锁定编排草案", detail: "保存角色、工作流和审查结论", agent: "Agent 工坊", status: "running" },
+        { id: "compile", title: "编译 Pack 契约", detail: "生成身份、角色、工作流和交付模板", agent: "Pack 编译器", status: "pending" },
+        { id: "assemble", title: "装配引导与能力", detail: "检查首次使用引导与能力需求", agent: "能力装配器", status: "pending" },
+        { id: "verify", title: "标准体检与注册", detail: "完整性全部通过后才进入能力仓", agent: "标准体检官", status: "pending" }
+      ]);
+      setAgentUnits({});
+      await openTask(buildTask);
+      setNotice("Agent Pack 构建任务已进入任务空间；你可以看到每个真实生成与体检阶段。");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setAgentBuildError(message);
+      setNotice(`Agent 创建失败：${message}`);
+    } finally {
+      setAgentCreating(false);
+    }
+  }
+
+  function updateAgentWorkshopField<K extends keyof AgentWorkshopForm>(
+    key: K,
+    value: AgentWorkshopForm[K]
+  ) {
+    setAgentWorkshopForm((current) => ({ ...current, [key]: value }));
+    agentWorkshopSessionIdRef.current = null;
+    setAgentDesignSession(null);
+    setAgentOrchestrationDraft(null);
+    setAgentOrchestrationEvents([]);
+    setAgentCreationResult(null);
+    setAgentBuildError("");
+  }
+
+  async function activateAgentPack(id: string | null, showGuide = true) {
+    if (!id) {
+      setSelectedAgentPackId(null);
+      setAgentLaunchGuide(null);
+      setAgentLaunchOpen(false);
+      setAgentLaunchValues({});
+      setAgentLaunchError("");
+      setAgentCapabilityReport(null);
+      setAgentCalibration(null);
+      setMcpDiscovery(null);
+      setSelectedMcpCandidates(new Set());
+      setNotice("已切回通用 NOVA，不装载行业 Agent Pack");
+      return;
+    }
+    try {
+      const [details, capabilityReport, calibration] = await Promise.all([
+        window.nova.agentPacks.get({ id }),
+        window.nova.agentPacks.getCapabilities({ id, workspace }),
+        window.nova.agentPacks.listCalibrations({ packId: id })
+      ]);
+      if (!details.summary.enabled) {
+        setNotice(`请先在 Agent 中心启用 ${details.summary.name}`);
+        return;
+      }
+      setSelectedAgentPackId(id);
+      setAgentLaunchGuide(details);
+      setAgentCapabilityReport(capabilityReport);
+      setAgentCalibration(calibration);
+      setMcpDiscovery(null);
+      setSelectedMcpCandidates(new Set());
+      setAgentLaunchValues({});
+      setAgentLaunchError("");
+      setExecutionMode("Goal");
+      setSettingsOpen(false);
+      if (showGuide && details.onboarding) {
+        setAgentLaunchOpen(true);
+        setNotice(`已装载 ${details.summary.name}；按引导补充现有线索即可开始`);
+      } else {
+        setNotice(`已装载 ${details.summary.name}；下一轮将使用它的角色、工作流与交付契约`);
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "专业 Agent 装载失败");
+    }
+  }
+
+  async function refreshAgentCapabilities(packId = selectedAgentPackId) {
+    if (!packId) return null;
+    const report = await window.nova.agentPacks.getCapabilities({
+      id: packId,
+      workspace
+    });
+    setAgentCapabilityReport(report);
+    return report;
+  }
+
+  async function scanLocalMcpConfigurations() {
+    setCapabilityPreparing(true);
+    try {
+      const result = await window.nova.capabilities.discoverMcp({ workspace });
+      if (result.canceled) {
+        setNotice("已取消本机 MCP 扫描；没有读取配置内容。");
+        return;
+      }
+      setMcpDiscovery(result);
+      setSelectedMcpCandidates(new Set(
+        result.candidates
+          .filter((candidate) =>
+            candidate.canImport
+            && !candidate.mayAcquireSoftware
+            && candidate.omittedSecretCount === 0)
+          .map((candidate) => candidate.id)
+      ));
+      setNotice(result.candidates.length
+        ? `已发现 ${result.candidates.length} 个 MCP 候选，请审阅后登记。`
+        : "扫描完成，没有发现可导入的 MCP 配置。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "本机 MCP 扫描失败");
+    } finally {
+      setCapabilityPreparing(false);
+    }
+  }
+
+  async function prepareAgentCapability(item: AgentPackCapabilityReport["items"][number]) {
+    if (item.state === "ready") return;
+    if (item.state === "registered-disabled") {
+      setAgentLaunchOpen(false);
+      openSettings(item.kind === "mcp" ? "mcp" : "skills");
+      setNotice(`“${item.name}”已经登记但尚未启用，请审阅后决定是否启用。`);
+      return;
+    }
+    if (item.state === "available" && item.catalogId) {
+      const current = capabilities || await loadCapabilities();
+      const catalogItem = current?.marketplace.find((candidate) =>
+        candidate.id === item.catalogId
+      );
+      if (catalogItem) {
+        setPendingBundledItem(catalogItem);
+        return;
+      }
+    }
+    if (item.kind === "mcp") {
+      setAgentLaunchOpen(false);
+      openSettings("mcp");
+      await scanLocalMcpConfigurations();
+      return;
+    }
+    setAgentLaunchOpen(false);
+    setStoreKind("skill");
+    setStoreQuery(item.name);
+    openSettings("plugins");
+    setNotice(`能力“${item.name}”尚未找到，可以从 Skills 超市选择。`);
+  }
+
+  async function importSelectedMcpCandidates() {
+    if (!mcpDiscovery) return;
+    const selected = mcpDiscovery.candidates.filter((candidate) =>
+      selectedMcpCandidates.has(candidate.id) && candidate.canImport
+    );
+    if (!selected.length) {
+      setAgentLaunchError("请至少选择一个可导入的 MCP 连接。");
+      return;
+    }
+    setCapabilityPreparing(true);
+    try {
+      const result = await window.nova.capabilities.importDiscoveredMcp({
+        candidates: selected
+      });
+      if (result.canceled) return;
+      setMcpDiscovery(null);
+      setSelectedMcpCandidates(new Set());
+      await Promise.all([loadCapabilities(), refreshAgentCapabilities()]);
+      setNotice(`已登记 ${result.imported.length} 个 MCP，并保持停用；启用前仍可逐项审阅。`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "MCP 登记失败");
+    } finally {
+      setCapabilityPreparing(false);
+    }
+  }
+
+  async function previewPastedMcpConfiguration() {
+    if (!mcpConfigText.trim()) {
+      setNotice("请粘贴 MCP URL、JSON 或 Codex TOML 配置。");
+      return;
+    }
+    setCapabilityPreparing(true);
+    try {
+      const result = await window.nova.capabilities.previewMcpConfig({
+        workspace,
+        configuration: mcpConfigText.trim(),
+        authorizationEnvironment: mcpAuthorizationEnvironment.trim() || undefined
+      });
+      setMcpDiscovery({ canceled: false, ...result });
+      setSelectedMcpCandidates(new Set(
+        result.candidates.filter((candidate) => candidate.canImport).map((candidate) => candidate.id)
+      ));
+      setNotice(result.candidates.length
+        ? `已解析 ${result.candidates.length} 个连接，请确认后登记。`
+        : "没有从这段内容中解析出 MCP 连接。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "MCP 配置解析失败");
+    } finally {
+      setCapabilityPreparing(false);
+    }
+  }
+
+  function useAgentLaunchOutcome(outcomeId: string) {
+    const onboarding = agentLaunchGuide?.onboarding;
+    const outcome = onboarding?.outcomes.find((item) => item.id === outcomeId);
+    if (!onboarding || !outcome) return;
+    const missing = onboarding.steps.filter((step) => {
+      if (!step.required) return false;
+      if (step.kind === "attachment") return attachments.length === 0;
+      return !agentLaunchValues[step.id]?.trim();
+    });
+    if (missing.length) {
+      const message = `开始前请补充：${missing.map((step) => step.title).join("、")}`;
+      setAgentLaunchError(message);
+      setNotice(message);
+      return;
+    }
+    setAgentLaunchError("");
+    let prompt = outcome.promptTemplate;
+    for (const step of onboarding.steps) {
+      const value = step.kind === "attachment"
+        ? attachments.length
+          ? attachments.map((item) => item.name).join("、")
+          : "未提供附件"
+        : agentLaunchValues[step.id]?.trim() || "未提供";
+      prompt = prompt.split(`{{${step.id}}}`).join(value);
+    }
+    setDraft(prompt);
+    setAgentLaunchOpen(false);
+    setNotice(`已生成“${outcome.title}”任务；可以继续补充后开始处理`);
   }
 
   async function loadExtensionProfiles() {
@@ -464,7 +1164,7 @@ function App() {
   async function installBundledItem(item: CapabilityState["marketplace"][number]) {
     await window.nova.capabilities.install({ id: item.id, workspace });
     setPendingBundledItem(null);
-    await loadCapabilities();
+    await Promise.all([loadCapabilities(), refreshAgentCapabilities()]);
     setNotice(`“${item.name}”已加入扩展坞；实际启用状态可在对应能力页查看`);
     addActivity("内置能力已加载", `${item.kind.toUpperCase()} · ${item.name}`, "done");
   }
@@ -475,6 +1175,7 @@ function App() {
     if (section === "mcp" || section === "skills" || section === "plugins") {
       void loadCapabilities();
     }
+    if (section === "agents") void loadAgentPacks();
     if (section === "ssh" || section === "cloud") void loadExtensionProfiles();
     if (section === "growth") void loadGrowthState();
   }
@@ -487,7 +1188,25 @@ function App() {
         if (!active) return;
         setBoot(info);
         setModel(info.defaults.deepseek.model);
-        await Promise.all([refreshTasks(), refreshArchivedTasks()]);
+        await Promise.all([refreshTasks(), refreshArchivedTasks(), loadAgentPacks()]);
+        const recoveredDesign = await window.nova.agentPacks.getDesignSession();
+        if (recoveredDesign) {
+          agentWorkshopSessionIdRef.current = recoveredDesign.id;
+          setAgentDesignSession(recoveredDesign);
+          setAgentOrchestrating(recoveredDesign.status === "running");
+          setAgentOrchestrationEvents(recoveredDesign.events || []);
+          setAgentOrchestrationDraft(recoveredDesign.draft || null);
+          const {
+            provider: _designProvider,
+            model: _designModel,
+            requiredInputs: _requiredInputs,
+            recommendedInputs: _recommendedInputs,
+            starterPrompts: _starterPrompts,
+            orchestration: _orchestration,
+            ...recoveredForm
+          } = recoveredDesign.request;
+          setAgentWorkshopForm((current) => ({ ...current, ...recoveredForm }));
+        }
         setNotice("内核在线，等待你的目标");
       } catch (error) {
         setNotice(error instanceof Error ? error.message : "AgentOS 启动失败");
@@ -499,7 +1218,82 @@ function App() {
   }, []);
 
   useEffect(() => {
+    selectedTaskIdRef.current = selectedTaskId;
+  }, [selectedTaskId]);
+
+  useEffect(() => window.nova.agentPacks.onOrchestrationEvent((event) => {
+    if (event.sessionId !== agentWorkshopSessionIdRef.current) return;
+    setAgentOrchestrationEvents((current) => {
+      const index = current.findIndex((item) => item.agent === event.agent);
+      if (index < 0) return [...current, event];
+      const next = [...current];
+      next[index] = event;
+      return next;
+    });
+  }), []);
+
+  useEffect(() => window.nova.agentPacks.onOrchestrationReady((event: AgentWorkshopReadyEvent) => {
+    if (event.sessionId !== agentWorkshopSessionIdRef.current) return;
+    setAgentOrchestrating(false);
+    if (event.error || !event.draft) {
+      setAgentDesignSession((current) => current && current.id === event.sessionId
+        ? {
+            ...current,
+            status: current.status === "cancelled" ? "cancelled" : "failed",
+            error: event.error || "没有生成可审阅草案"
+          }
+        : current);
+      setNotice(`Agent 编排没有完成：${event.error || "没有生成可审阅草案"}`);
+      return;
+    }
+    setAgentDesignSession((current) => current && current.id === event.sessionId
+      ? { ...current, status: "completed", draft: event.draft || null, error: "" }
+      : current);
+    setAgentOrchestrationDraft(event.draft);
+    setNotice(`多 Agent 编排完成：${event.draft.roles.length} 个角色 · ${event.draft.workflow.length} 个步骤，等待你确认。`);
+  }), []);
+
+  useEffect(() => {
     const unsubscribe = window.nova.model.onEvent((event: AgentEvent) => {
+      const completed = event.kind === "completed" && event.progress >= 100;
+      setTasks((current) => current.map((task) =>
+        task.id === event.taskId
+          ? {
+              ...task,
+              status: event.kind === "failed" ? "Failed" : completed ? "Completed" : "Running",
+              state: event.kind === "failed" ? "Failed" : completed ? "Completed" : "Running",
+              progress: Math.max(task.progress || 0, event.progress || 0),
+              summary: event.action || task.summary
+            }
+          : task
+      ));
+      if (event.kind === "failed" || completed) {
+        setRunningTaskIds((current) => {
+          const next = new Set(current);
+          next.delete(event.taskId);
+          return next;
+        });
+        void refreshTasks();
+        if (completed && event.packId) {
+          void loadAgentPacks(event.packId);
+          setNotice("Agent Pack 已完成真实生成与 100/100 体检；当前保持停用，等待你检查后启用。");
+        } else if (event.kind === "failed" && event.agent === "Agent Pack Builder") {
+          setNotice(`Agent Pack 构建已停止：${event.detail}`);
+        }
+        if (event.taskId === selectedTaskIdRef.current) {
+          void window.nova.system.getTask({ taskId: event.taskId }).then((recovered) => {
+            if (event.taskId !== selectedTaskIdRef.current) return;
+            setMessages(recovered.messages.map((message) => ({
+              ...message,
+              createdAt: new Date(message.createdAt).toLocaleTimeString("zh-CN", {
+                hour: "2-digit",
+                minute: "2-digit"
+              })
+            })));
+          }).catch(() => undefined);
+        }
+      }
+      if (event.taskId !== selectedTaskIdRef.current) return;
       lastRuntimeEventAt.current = Date.now();
       setRuntimePulse(
         event.kind === "textdelta"
@@ -524,10 +1318,15 @@ function App() {
         try {
           const payload = JSON.parse(event.detail) as {
             strategy?: string;
+            replacePlan?: boolean;
             steps?: Array<Pick<PlanStep, "id" | "title" | "detail" | "agent">>;
           };
           setPlanTitle(payload.strategy || "Agent 并行计划");
-          setTaskPlan([
+          const plannedSteps = (payload.steps || []).map((step) => ({
+            ...step,
+            status: "pending" as const
+          }));
+          setTaskPlan(payload.replacePlan ? plannedSteps : [
             {
               id: "understand",
               title: "理解目标与约束",
@@ -535,7 +1334,7 @@ function App() {
               agent: "NOVA",
               status: "done"
             },
-            ...(payload.steps || []).map((step) => ({ ...step, status: "pending" as const })),
+            ...plannedSteps,
             {
               id: "execute",
               title: "整合并实施",
@@ -584,7 +1383,8 @@ function App() {
           if (step.id === "execute" && event.agent === "NOVA") {
             return { ...step, status: isDone ? "done" : isActive ? "running" : step.status };
           }
-          if (step.id === "verify" && event.kind === "completed") {
+          if (step.id === "verify" && event.kind === "completed"
+              && (event.agent === "审查官" || event.agent.includes("体检"))) {
             return { ...step, status: "done", output: event.detail || step.output };
           }
           return step;
@@ -750,12 +1550,19 @@ function App() {
     const content = draft.trim();
     if (!content) return;
     if (running) {
+      const runId = selectedTaskId
+        ? taskRunIds.current.get(selectedTaskId)
+        : undefined;
+      if (!runId) {
+        setNotice("Agent Pack 正在执行确定性构建与体检；完成后可以在任务中继续纠正或重新生成。");
+        return;
+      }
       const correction = { content, attachments };
       setDraft("");
       setAttachments([]);
       setQueuedCorrection(correction);
-      if (activeRunId.current) {
-        await window.nova.model.cancel({ runId: activeRunId.current });
+      if (runId) {
+        await window.nova.model.cancel({ runId });
       }
       setNotice("正在停止上一条路径，随后按你的纠正继续");
       return;
@@ -781,6 +1588,30 @@ function App() {
     const { content, attachments: submittedAttachments } = pendingSubmission;
     setPendingSubmission(null);
     setApprovalOpen(false);
+    const runTaskId = selectedTaskId
+      ?? `electron-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
+    selectedTaskIdRef.current = runTaskId;
+    setSelectedTaskId(runTaskId);
+    setRunningTaskIds((current) => new Set(current).add(runTaskId));
+    setTasks((current) => {
+      if (current.some((task) => task.id === runTaskId)) {
+        return current.map((task) => task.id === runTaskId
+          ? { ...task, status: "Running", state: "Running", summary: "正在执行", progress: 3 }
+          : task);
+      }
+      return [{
+        id: runTaskId,
+        title: content.split(/\r?\n/, 1)[0].slice(0, 42) || "新任务",
+        status: "Running",
+        state: "Running",
+        summary: "正在执行",
+        progress: 3,
+        workspaceRoot: workspace || undefined,
+        provider,
+        model,
+        executionMode
+      }, ...current];
+    });
 
     const userMessage: Message = {
       id: crypto.randomUUID(),
@@ -793,7 +1624,6 @@ function App() {
     setMessages(nextMessages);
     setDraft("");
     setAttachments([]);
-    setRunning(true);
     streamBuffer.current = "";
     setStreamingText("");
     lastRuntimeEventAt.current = Date.now();
@@ -816,36 +1646,40 @@ function App() {
     );
     addActivity("任务进入内核", content.slice(0, 72), "running");
     const runId = crypto.randomUUID();
-    activeRunId.current = runId;
+    taskRunIds.current.set(runTaskId, runId);
 
     try {
       const result = await window.nova.model.run({
         provider,
         model,
         workspace,
-        taskId: selectedTaskId,
+        taskId: runTaskId,
         runId,
         approvalMode,
         executionMode,
         crossModelReview,
+        agentPackId: selectedAgentPackId,
         messages: nextMessages.map(({ role, content: body }) => ({
           role,
           content: body
         })),
         attachments: userMessage.attachments || []
       });
-      setSelectedTaskId(result.taskId);
-      setMessages((items) => [
-        ...items,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: result.output,
-          createdAt: now(),
-          verification: result.verification,
-          delivery: result.delivery
-        }
-      ]);
+      if (selectedTaskIdRef.current === runTaskId) {
+        selectedTaskIdRef.current = result.taskId;
+        setSelectedTaskId(result.taskId);
+        setMessages((items) => [
+          ...items,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: result.output,
+            createdAt: now(),
+            verification: result.verification,
+            delivery: result.delivery
+          }
+        ]);
+      }
       setNotice(
         result.delivery?.status === "PARTIAL"
           ? result.delivery.summary
@@ -866,9 +1700,9 @@ function App() {
         addActivity("执行已停止", "等待新的方向", "done");
         return;
       }
-      setNotice(message);
+      if (selectedTaskIdRef.current === runTaskId) setNotice(message);
       addActivity("本轮需要处理", message, "failed");
-      setMessages((items) => [
+      if (selectedTaskIdRef.current === runTaskId) setMessages((items) => [
         ...items,
         {
           id: crypto.randomUUID(),
@@ -879,35 +1713,60 @@ function App() {
       ]);
       await refreshTasks().catch(() => undefined);
     } finally {
-      activeRunId.current = null;
-      setRunning(false);
-      streamBuffer.current = "";
-      setStreamingText("");
-      if (streamFlushTimer.current) {
-        clearTimeout(streamFlushTimer.current);
-        streamFlushTimer.current = null;
+      taskRunIds.current.delete(runTaskId);
+      setRunningTaskIds((current) => {
+        const next = new Set(current);
+        next.delete(runTaskId);
+        return next;
+      });
+      if (selectedTaskIdRef.current === runTaskId) {
+        streamBuffer.current = "";
+        setStreamingText("");
+        if (streamFlushTimer.current) {
+          clearTimeout(streamFlushTimer.current);
+          streamFlushTimer.current = null;
+        }
       }
     }
   }
 
   async function stopCurrentRun() {
-    if (!activeRunId.current) return;
-    await window.nova.model.cancel({ runId: activeRunId.current });
+    if (!selectedTaskId) return;
+    const runId = taskRunIds.current.get(selectedTaskId);
+    if (!runId) return;
+    await window.nova.model.cancel({ runId });
     setNotice("正在安全停止当前执行");
   }
 
   function newTask() {
+    selectedTaskIdRef.current = null;
     setSelectedTaskId(null);
     setMessages([]);
     setDraft("");
     setAttachments([]);
-    setNotice("新线程已准备好，告诉我想达成什么结果");
+    setAgentLaunchValues({});
+    setAgentLaunchOpen(Boolean(selectedAgentPackId && agentLaunchGuide?.onboarding));
+    setNotice(
+      selectedAgentPackId && agentLaunchGuide?.onboarding
+        ? "新线程已准备好，按专业 Agent 引导补充线索即可开始"
+        : "新线程已准备好，告诉我想达成什么结果"
+    );
+    if (window.innerWidth <= 1180) setLeftOpen(false);
   }
 
   return (
-    <div className={`app-shell ${rightOpen ? "" : "trace-collapsed"}`}>
+    <div className={`app-shell ${leftOpen ? "" : "rail-collapsed"} ${rightOpen ? "" : "trace-collapsed"}`}>
       <header className="titlebar">
         <div className="brand">
+          <button
+            className="rail-menu-toggle"
+            type="button"
+            aria-label={leftOpen ? "收起任务空间" : "展开任务空间"}
+            title={leftOpen ? "收起任务空间" : "展开任务空间"}
+            onClick={() => setLeftOpen((value) => !value)}
+          >
+            <Menu size={18} />
+          </button>
           <div className="brand-core"><span /></div>
           <strong>NOVA</strong>
           <span className="brand-edition">AGENTOS · ELECTRON</span>
@@ -976,7 +1835,7 @@ function App() {
                   type="button"
                   aria-label={`归档 ${task.title || "任务"}`}
                   title="移入归档库"
-                  disabled={running}
+                  disabled={runningTaskIds.has(task.id)}
                   onClick={() => setPendingArchiveTask(task)}
                 >
                   <Archive size={15} />
@@ -1037,9 +1896,18 @@ function App() {
           <div className="thread-header">
             <div className={`nova-orb ${running ? "thinking" : ""}`}><span /></div>
             <div>
-              <span>NOVA THREADSPACE</span>
+              <span>{selectedAgentPack ? selectedAgentPack.name : "NOVA THREADSPACE"}</span>
               <strong>{running ? "正在建立解题路径" : "上下文会沿着同一条任务脉络延续"}</strong>
             </div>
+            <button
+              type="button"
+              className={`thread-agent-pack ${selectedAgentPack ? "active" : ""}`}
+              disabled={running}
+              onClick={() => openSettings("agents")}
+            >
+              <Bot size={15} />
+              {selectedAgentPack ? selectedAgentPack.category : "通用 NOVA"}
+            </button>
           </div>
 
           <div className="conversation">
@@ -1050,26 +1918,12 @@ function App() {
                 </div>
                 <h2>先说结果，不必学习复杂术语</h2>
                 <p>选好工作区，描述你最终想看到什么。NOVA 会保留上下文、调用模型，并把每轮执行落进 AgentOS。</p>
-                <div className="starter-grid">
-                  {[
-                    ["检查一个工程", "理解结构、定位问题并给出改良方案"],
-                    ["做出一个产品", "从目标探索到可验证交付"],
-                    ["继续上次任务", "沿保存的上下文接着推进"]
-                  ].map(([title, detail]) => (
-                    <button
-                      key={title}
-                      onClick={() => setDraft(`${title}：${detail}`)}
-                    >
-                      <FileCode2 size={18} />
-                      <span><strong>{title}</strong><small>{detail}</small></span>
-                    </button>
-                  ))}
-                </div>
               </div>
             ) : (
               <div className="message-list">
                 {messages.map((message) => {
                   const parsed = parseChoices(message.content);
+                  const presentation = parseDeliveryPresentation(parsed.display);
                   return (
                   <article className={`message ${message.role}`} key={message.id}>
                     <div className="message-meta">
@@ -1077,50 +1931,91 @@ function App() {
                       <strong>{message.role === "assistant" ? "NOVA" : "你"}</strong>
                       <time>{message.createdAt}</time>
                     </div>
-                    <div className={`message-body ${message.role === "assistant" ? "markdown-body" : ""}`}>
-                      {message.role === "assistant"
-                        ? <MarkdownContent content={parsed.display} />
-                        : parsed.display}
-                    </div>
+                    {(!message.delivery || message.role !== "assistant") && (
+                      <div className={`message-body ${message.role === "assistant" ? "markdown-body" : ""}`}>
+                        {message.role === "assistant"
+                          ? <MarkdownContent content={presentation.display} />
+                          : parsed.display}
+                      </div>
+                    )}
                     {message.role === "assistant" && message.delivery && (
                       <section
-                        className={`delivery-passport ${message.delivery.status.toLowerCase()}`}
+                        className={`delivery-result ${message.delivery.status.toLowerCase()}`}
                       >
-                        <div className="delivery-passport-heading">
-                          <ShieldCheck size={17} />
+                        <header className="delivery-result-hero">
+                          <div className="delivery-result-mark"><ShieldCheck size={19} /></div>
                           <div>
+                            <span>本轮成果</span>
                             <strong>
-                              {message.delivery.status === "PROVEN"
-                                ? "跨模型已验证"
-                                : message.delivery.status === "EVIDENCED"
-                                  ? "已有本机证据"
-                                  : message.delivery.status === "PARTIAL"
-                                    ? "待继续完成"
-                                    : "结果已生成"}
+                              {presentation.outcome?.verdict ||
+                                (message.delivery.status === "PARTIAL" ? "还需要一步" : "已经可以接手")}
                             </strong>
-                            <span>{message.delivery.summary}</span>
+                            <small>{presentation.outcome?.reason || message.delivery.summary}</small>
                           </div>
+                          <button
+                            type="button"
+                            className="delivery-review-open"
+                            onClick={() => openDeliverySummary("本轮交付说明", presentation.display)}
+                          >
+                            窗内审查
+                          </button>
                           <b>{message.delivery.status}</b>
-                        </div>
+                        </header>
+
+                        {!!presentation.metrics.length && (
+                          <div className="delivery-metrics">
+                            {presentation.metrics.map((metric) => (
+                              <span key={`${metric.label}-${metric.value}`}>
+                                <small>{metric.label}</small>
+                                <strong>{metric.value}</strong>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
                         <div className="delivery-proof-row">
-                          <span>
-                            文件写入
-                            <b>{message.delivery.hasWorkspaceChanges ? "有" : "无"}</b>
-                          </span>
-                          <span>
-                            验证步骤
-                            <b>{message.delivery.validationRuns}</b>
-                          </span>
-                          {message.verification && (
-                            <span>
-                              独立审查
-                              <b>
-                                {message.verification.verdict} ·{" "}
-                                {message.verification.confidence}%
-                              </b>
-                            </span>
-                          )}
+                          <span>文件落盘 <b>{message.delivery.hasWorkspaceChanges ? "已完成" : "无变更"}</b></span>
+                          <span>本机检查 <b>{message.delivery.validationRuns} 项</b></span>
+                          {message.verification && <span>独立复核 <b>{message.verification.verdict} · {message.verification.confidence}%</b></span>}
                         </div>
+
+                        {!!presentation.artifacts.length && (
+                          <section className="delivery-artifacts">
+                            <header><strong>可接手的交付物</strong><span>{presentation.artifacts.length} 项</span></header>
+                            <div>
+                              {presentation.artifacts.map((artifact) => (
+                                <button
+                                  type="button"
+                                  className="delivery-artifact-item"
+                                  key={`${artifact.label}-${artifact.path}`}
+                                  disabled={deliveryReviewLoading}
+                                  onClick={() => void openDeliveryArtifact(artifact)}
+                                >
+                                  <FileCode2 size={16} />
+                                  <span><strong>{artifact.label}</strong><small>{artifact.path}</small></span>
+                                </button>
+                              ))}
+                            </div>
+                          </section>
+                        )}
+
+                        <details className="delivery-report" open={message.delivery.status === "PARTIAL"}>
+                          <summary>查看完整交付说明 <ChevronDown size={15} /></summary>
+                          <div className="message-body markdown-body">
+                            <MarkdownContent content={presentation.display} />
+                          </div>
+                        </details>
+
+                        {presentation.nextAction && (
+                          <button
+                            type="button"
+                            className="delivery-next-action"
+                            onClick={() => setDraft(presentation.nextAction)}
+                          >
+                            <span><small>建议下一步</small><strong>{presentation.nextAction}</strong></span>
+                            <Send size={16} />
+                          </button>
+                        )}
                         {message.verification && (
                           <details className="verification-detail">
                             <summary>
@@ -1220,18 +2115,51 @@ function App() {
             rows={3}
           />
           <div className="composer-bar">
-            <div>
-              <button type="button" onClick={chooseAttachments}>
-                <Paperclip size={17} />
-                <span>附件</span>
-              </button>
-              <button type="button" onClick={chooseWorkspace}>
-                <FolderOpen size={17} />
-              </button>
-              <span className="conversation-memory">
-                <MessageSquareText size={14} />
-                {messages.length ? `${messages.length} 条上下文已保存` : "新会话"}
-              </span>
+            <div className="composer-tools">
+              <div className="composer-context-actions">
+                <button type="button" onClick={chooseAttachments}>
+                  <Paperclip size={17} />
+                  <span>附件</span>
+                </button>
+                <button type="button" onClick={chooseWorkspace} title="选择工作区">
+                  <FolderOpen size={17} />
+                </button>
+                <span className="conversation-memory">
+                  <MessageSquareText size={14} />
+                  {messages.length ? `${messages.length} 条上下文已保存` : "新会话"}
+                </span>
+              </div>
+              <div className="composer-execution-actions">
+              <label className={`agent-pack-control ${selectedAgentPack ? "active" : ""}`}>
+                <Bot size={16} />
+                <select
+                  aria-label="选择专业 Agent"
+                  value={selectedAgentPackId || ""}
+                  disabled={running || agentPacksLoading}
+                  onChange={(event) => {
+                    const nextId = event.target.value || null;
+                    void activateAgentPack(nextId);
+                  }}
+                >
+                  <option value="">通用 NOVA</option>
+                  {agentPacks.filter((pack) => pack.enabled).map((pack) => (
+                    <option value={pack.id} key={pack.id}>{pack.category} · {pack.name}</option>
+                  ))}
+                </select>
+                <ChevronDown size={14} />
+              </label>
+              {selectedAgentPack && agentLaunchGuide?.onboarding && (
+                <button
+                  type="button"
+                  className="agent-guide-reopen"
+                  disabled={running}
+                  onClick={() => setAgentLaunchOpen(true)}
+                  title="打开这个专业 Agent 的启动资料引导"
+                >
+                  <Sparkles size={15} />
+                  <span>怎么开始</span>
+                </button>
+              )}
               <label className={`agent-mode-control ${executionMode === "Autopilot" ? "active" : ""}`}>
                 <BrainCircuit size={16} />
                 <select
@@ -1267,8 +2195,9 @@ function App() {
                   {crossModelReview
                     ? `双模型复核 · ${providerLabels[reviewCandidates[0]]}`
                     : "双模型复核"}
-                </span>
-              </button>
+                  </span>
+                </button>
+              </div>
             </div>
             <div className="run-actions">
               {running && (
@@ -1396,6 +2325,146 @@ function App() {
         </div>
       </aside>
 
+      {agentLaunchOpen && agentLaunchGuide?.onboarding && (
+        <div
+          className="modal-layer agent-launch-layer"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setAgentLaunchOpen(false);
+          }}
+        >
+          <div className="agent-launch-modal">
+            <header>
+              <div className="agent-launch-symbol"><Bot size={20} /></div>
+              <div>
+                <span>{agentLaunchGuide.summary.category} · 启动引导</span>
+                <h2>{agentLaunchGuide.onboarding.headline}</h2>
+                <p>{agentLaunchGuide.onboarding.description}</p>
+              </div>
+              <button type="button" onClick={() => setAgentLaunchOpen(false)}><X size={18} /></button>
+            </header>
+
+            {agentCapabilityReport && agentCapabilityReport.items.length > 0 && (
+              <section className="agent-capability-preflight">
+                <header>
+                  <div>
+                    <span>能力准备</span>
+                    <strong>
+                      {agentCapabilityReport.requiredReadyCount}/{agentCapabilityReport.requiredCount} 项必需能力已就绪
+                    </strong>
+                  </div>
+                  <small>只检查状态；扫描、登记、启用和真实调用都需要你明确操作。</small>
+                </header>
+                <div>
+                  {agentCapabilityReport.items.map((item) => (
+                    <article className={item.state} key={item.id}>
+                      <span className="agent-capability-kind">{item.kind.toUpperCase()}</span>
+                      <div>
+                        <strong>{item.name}</strong>
+                        <p>{item.reason}</p>
+                        <small>{item.required ? "本 Agent 建议就绪" : "可选增强"}</small>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={capabilityPreparing || item.state === "ready"}
+                        onClick={() => void prepareAgentCapability(item)}
+                      >
+                        {item.state === "ready"
+                          ? "已就绪"
+                          : item.state === "registered-disabled"
+                            ? "审阅并启用"
+                            : item.state === "available"
+                              ? "审阅并加载"
+                              : item.kind === "mcp"
+                                ? "扫描或接入"
+                                : "去能力超市"}
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            <section className="agent-launch-steps">
+              {agentLaunchGuide.onboarding.steps.map((step, index) => (
+                <article className="agent-launch-step" key={step.id}>
+                  <div className="agent-launch-step-number">{index + 1}</div>
+                  <div className="agent-launch-step-content">
+                    <header>
+                      <strong>{step.title}</strong>
+                      <span>{step.required ? "开始所需" : "有则更准"}</span>
+                    </header>
+                    <p>{step.description}</p>
+                    {step.kind === "attachment" ? (
+                      <div className="agent-launch-attachment">
+                        <button type="button" onClick={() => void chooseAttachments()}>
+                          <Paperclip size={16} />
+                          {attachments.length ? `已添加 ${attachments.length} 个文件` : step.placeholder || "添加资料"}
+                        </button>
+                        {!!attachments.length && <small>{attachments.map((item) => item.name).join(" · ")}</small>}
+                      </div>
+                    ) : step.kind === "select" ? (
+                      <select
+                        value={agentLaunchValues[step.id] || ""}
+                        onChange={(event) => setAgentLaunchValues((values) => ({
+                          ...values,
+                          [step.id]: event.target.value
+                        }))}
+                      >
+                        <option value="">{step.placeholder || "请选择"}</option>
+                        {step.options.map((option) => <option value={option} key={option}>{option}</option>)}
+                      </select>
+                    ) : (
+                      <textarea
+                        rows={2}
+                        value={agentLaunchValues[step.id] || ""}
+                        placeholder={step.placeholder}
+                        onChange={(event) => setAgentLaunchValues((values) => ({
+                          ...values,
+                          [step.id]: event.target.value
+                        }))}
+                      />
+                    )}
+                    <details>
+                      <summary>为什么需要这项资料？</summary>
+                      <p>{step.whyItMatters}</p>
+                      {step.example && <small>{step.example}</small>}
+                    </details>
+                  </div>
+                </article>
+              ))}
+            </section>
+
+            {agentLaunchError && <div className="agent-launch-error">{agentLaunchError}</div>}
+
+            <section className="agent-launch-outcomes">
+              <header>
+                <div><span>最后一步</span><strong>你想先得到什么？</strong></div>
+                <small>选择后会生成可继续编辑的任务，不会立即扣费执行。</small>
+              </header>
+              <div>
+                {agentLaunchGuide.onboarding.outcomes.map((outcome, index) => (
+                  <button
+                    type="button"
+                    className={index === 0 ? "recommended" : ""}
+                    key={outcome.id}
+                    onClick={() => useAgentLaunchOutcome(outcome.id)}
+                  >
+                    <strong>{outcome.title}</strong>
+                    <span>{outcome.description}</span>
+                    <b>{index === 0 ? "推荐起点" : "生成任务"}</b>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <footer>
+              <span>资料不完整不会阻止开始；NOVA 会降低结论级别，并告诉你下一份最值得收集的证据。</span>
+              <button type="button" onClick={() => setAgentLaunchOpen(false)}>先自己描述</button>
+            </footer>
+          </div>
+        </div>
+      )}
+
       {settingsOpen && (
         <div className="modal-layer" onMouseDown={(event) => {
           if (event.currentTarget === event.target) setSettingsOpen(false);
@@ -1407,9 +2476,11 @@ function App() {
                 <span><strong>扩展坞</strong><small>模型、能力与远程环境</small></span>
               </div>
               {([
+                ["agents", "Agents", Bot],
                 ["model", "模型", KeyRound],
                 ["mcp", "MCP", Server],
                 ["skills", "Skills", BrainCircuit],
+                ["knowledge", "知识库", BookOpen],
                 ["growth", "成长", Sparkles],
                 ["ssh", "SSH", Terminal],
                 ["cloud", "云开发", Cloud],
@@ -1424,6 +2495,8 @@ function App() {
                     if (id === "mcp" || id === "skills" || id === "plugins") {
                       void loadCapabilities();
                     }
+                    if (id === "agents") void loadAgentPacks();
+                    if (id === "knowledge") void loadKnowledge();
                     if (id === "growth") void loadGrowthState();
                     if (id === "ssh" || id === "cloud") void loadExtensionProfiles();
                   }}
@@ -1437,18 +2510,502 @@ function App() {
               <header className="dock-heading">
                 <div>
                   <h2>
+                    {settingsSection === "agents" && "Agent 中心"}
                     {settingsSection === "model" && "模型连接"}
                     {settingsSection === "mcp" && "MCP 连接"}
                     {settingsSection === "skills" && "Skills"}
+                    {settingsSection === "knowledge" && "知识库"}
                     {settingsSection === "growth" && "成长与桌面"}
                     {settingsSection === "ssh" && "SSH 工作区"}
                     {settingsSection === "cloud" && "云开发适配器"}
                     {settingsSection === "plugins" && "能力组件"}
                   </h2>
-                  <p>只显示真实状态；安装、启用和外部访问都需要明确确认。</p>
+                  <p>
+                    {settingsSection === "agents"
+                      ? "专业 Agent 只扩展任务知识与工作流，不改变 NOVA 的权限和证据边界。"
+                      : settingsSection === "knowledge"
+                        ? "把当前工作区的资料变成可检索、可追溯的本地知识，不会自动上传到外部服务。"
+                        : "只显示真实状态；安装、启用和外部访问都需要明确确认。"}
+                  </p>
                 </div>
                 <button type="button" onClick={() => setSettingsOpen(false)}><X size={18} /></button>
               </header>
+
+              {settingsSection === "agents" && (
+                <div className="agent-center">
+                  <section className="agent-center-hero">
+                    <div>
+                      <span>AGENT PACKS</span>
+                      <strong>一个 NOVA，装载不同专业工作方式</strong>
+                      <small>行业包声明角色、流程、证据规则与交付模板；模型、权限、预算和任务历史仍由 AgentOS 统一治理。</small>
+                    </div>
+                    <div className="agent-center-actions">
+                      <b>{agentPacks.filter((pack) => pack.enabled).length} 个已启用</b>
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={() => {
+                          setAgentWorkshopOpen((value) => !value);
+                          setAgentCreationResult(null);
+                        }}
+                      >
+                        <Plus size={14} />
+                        {agentWorkshopOpen ? "收起工坊" : "创建 Agent"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            const result = await window.nova.agentPacks.install();
+                            if (result.canceled || !result.pack) return;
+                            await loadAgentPacks(result.pack.id);
+                            setNotice(`${result.pack.name} 已安全导入；检查结构后再启用即可。`);
+                            await inspectAgentPack(result.pack.id);
+                          } catch (error) {
+                            setNotice(`导入失败：${error instanceof Error ? error.message : String(error)}`);
+                          }
+                        }}
+                      >
+                        导入 Agent Pack
+                      </button>
+                    </div>
+                  </section>
+
+                  {agentWorkshopOpen && (
+                    <form className="agent-workshop" onSubmit={orchestrateAgentPack}>
+                      <header>
+                        <div>
+                          <span>NOVA AGENT CREATION STANDARD 1.0</span>
+                          <strong>Agent 工坊</strong>
+                          <small>统一可靠性与协作契约，同时保留行业、场景、自主程度和交付方式的差异。</small>
+                        </div>
+                        <b>生成后默认停用</b>
+                      </header>
+
+                      <section className="agent-template-picker">
+                        <div className="agent-workshop-section-title">
+                          <span>01</span>
+                          <div><strong>选择工作场景</strong><small>模板只提供可靠的起点，不限制行业做法。</small></div>
+                        </div>
+                        <div>
+                          {agentCreationTemplates.map((template) => (
+                            <button
+                              type="button"
+                              key={template.id}
+                              className={agentWorkshopForm.scenarioProfile === template.id ? "active" : ""}
+                              onClick={() => {
+                                updateAgentWorkshopField("scenarioProfile", template.id);
+                                updateAgentWorkshopField("primaryArtifact", template.defaultArtifact);
+                              }}
+                            >
+                              <strong>{template.name}</strong>
+                              <small>{template.description}</small>
+                            </button>
+                          ))}
+                        </div>
+                      </section>
+
+                      <section className="agent-workshop-fields">
+                        <div className="agent-workshop-section-title">
+                          <span>02</span>
+                          <div><strong>定义行业与结果</strong><small>先定义最终要交付什么，再决定 Agent 如何工作。</small></div>
+                        </div>
+                        <div className="agent-workshop-grid">
+                          <label><span>Agent 名称</span><input required value={agentWorkshopForm.name} onChange={(event) => updateAgentWorkshopField("name", event.target.value)} placeholder="例如：墨西哥新品机会侦察" /></label>
+                          <label><span>Agent ID · 系统自动生成</span><input required readOnly value={agentWorkshopForm.id} title="每个新 Agent 都会获得独立且不可重复的系统 ID" /></label>
+                          <label><span>行业分类</span><input required value={agentWorkshopForm.category} onChange={(event) => updateAgentWorkshopField("category", event.target.value)} placeholder="例如：跨境电商 / 医疗器械 / 制造业" /></label>
+                          <label><span>主交付物</span><input required value={agentWorkshopForm.primaryArtifact} onChange={(event) => updateAgentWorkshopField("primaryArtifact", event.target.value)} placeholder="可检查的中文文件名.md" /></label>
+                          <label className="wide"><span>最终目标</span><input required value={agentWorkshopForm.objective} onChange={(event) => updateAgentWorkshopField("objective", event.target.value)} placeholder="描述最终能被检查和验收的结果" /></label>
+                          <label className="wide"><span>服务说明</span><textarea required minLength={10} value={agentWorkshopForm.description} onChange={(event) => updateAgentWorkshopField("description", event.target.value)} placeholder="说明服务对象、典型任务和不负责的边界" /></label>
+                        </div>
+                      </section>
+
+                      <section className="agent-workshop-fields">
+                        <div className="agent-workshop-section-title">
+                          <span>03</span>
+                          <div><strong>保留 Agent 的多样性</strong><small>这些参数决定它是助手、执行者、长期监控者还是协调者。</small></div>
+                        </div>
+                        <div className="agent-workshop-axis">
+                          <label><span>自主程度</span><select value={agentWorkshopForm.autonomyLevel} onChange={(event) => updateAgentWorkshopField("autonomyLevel", event.target.value)}><option value="assist">辅助建议</option><option value="approval-execute">审批后执行</option><option value="goal-autonomous">目标自治</option></select></label>
+                          <label><span>工作周期</span><select value={agentWorkshopForm.lifecycle} onChange={(event) => updateAgentWorkshopField("lifecycle", event.target.value)}><option value="single-run">单次任务</option><option value="project">项目持续</option><option value="continuous">长期监控</option><option value="scheduled">定时运行</option></select></label>
+                          <label><span>协作方式</span><select value={agentWorkshopForm.collaborationMode} onChange={(event) => updateAgentWorkshopField("collaborationMode", event.target.value)}><option value="independent">独立完成</option><option value="specialist-team">专业工作组</option><option value="coordinator">主协调 Agent</option></select></label>
+                          <label><span>交付形式</span><select value={agentWorkshopForm.deliveryMode} onChange={(event) => updateAgentWorkshopField("deliveryMode", event.target.value)}><option value="conversation">对话</option><option value="document">文档</option><option value="data">数据</option><option value="code">代码</option><option value="operation">软件操作</option><option value="mixed">混合交付</option></select></label>
+                          <label><span>判断风格</span><select value={agentWorkshopForm.decisionStyle} onChange={(event) => updateAgentWorkshopField("decisionStyle", event.target.value)}><option value="conservative">保守</option><option value="balanced">平衡</option><option value="exploratory">探索</option><option value="creative">创新</option><option value="compliance-first">合规优先</option></select></label>
+                        </div>
+                      </section>
+
+                      <section className="agent-workshop-fields">
+                        <div className="agent-workshop-section-title">
+                          <span>04</span>
+                          <div><strong>NOVA 给出的启动建议</strong><small>根据前面三步自动总结，不需要你再填写；资料不足时 Agent 会保留未知项并降低结论级别。</small></div>
+                        </div>
+                        <div className="agent-workshop-recommendation">
+                          <header>
+                            <span><Sparkles size={14} /></span>
+                            <div>
+                              <strong>{agentRecommendationLoading ? "正在理解前面三步…" : "已形成 Agent 启动策略"}</strong>
+                              <p>{agentWorkshopRecommendation?.summary || "完善上方的行业、目标和工作方式后，NOVA 会在这里给出用户资料建议。"}</p>
+                            </div>
+                            <b>自动生成</b>
+                          </header>
+                          {!!agentWorkshopRecommendation?.designSignals.length && (
+                            <div className="agent-recommendation-signals">
+                              {agentWorkshopRecommendation.designSignals.map((signal) => <span key={signal}>{signal}</span>)}
+                            </div>
+                          )}
+                          <div className="agent-recommendation-columns">
+                            <section>
+                              <span>建议用户先准备</span>
+                              <strong>形成可靠结果的核心资料</strong>
+                              <ul>
+                                {(agentWorkshopRecommendation?.requiredInputs || []).map((item) => <li key={item}>{item}</li>)}
+                              </ul>
+                            </section>
+                            <section>
+                              <span>有则更好</span>
+                              <strong>提高证据质量的补充资料</strong>
+                              <ul>
+                                {(agentWorkshopRecommendation?.recommendedInputs || []).map((item) => <li key={item}>{item}</li>)}
+                              </ul>
+                            </section>
+                          </div>
+                          {!!agentWorkshopRecommendation?.starterPrompts.length && (
+                            <section className="agent-recommendation-starters">
+                              <span>Agent 创建后会主动提供这些起点</span>
+                              <div>
+                                {agentWorkshopRecommendation.starterPrompts.map((prompt) => <p key={prompt}>{prompt}</p>)}
+                              </div>
+                            </section>
+                          )}
+                        </div>
+                      </section>
+
+                      {(agentOrchestrating || agentDesignSession || agentOrchestrationEvents.length > 0 || agentOrchestrationDraft) && (
+                        <section className="agent-workshop-orchestration">
+                          <div className="agent-workshop-section-title">
+                            <span>05</span>
+                            <div>
+                              <strong>智能体编排与交叉审查</strong>
+                              <small>草案来自 Runtime 中的真实子 Agent 工作组；确认前不创建任务，也不会写入 Agent Pack。</small>
+                            </div>
+                            {agentDesignSession && (
+                              <b>{agentDesignSession.status === "running"
+                                ? "设计中"
+                                : agentDesignSession.status === "completed"
+                                  ? "等待确认"
+                                  : agentDesignSession.status === "cancelled"
+                                    ? "已停止"
+                                    : agentDesignSession.status === "interrupted"
+                                      ? "可重新编排"
+                                      : "未完成"}</b>
+                            )}
+                          </div>
+                          <div className="agent-orchestration-agents">
+                            {agentOrchestrationEvents.map((event) => (
+                              <article className={event.status} key={event.agent}>
+                                <span>{event.status === "done" ? <Check size={13} /> : event.status === "failed" ? <X size={13} /> : <Sparkles size={13} />}</span>
+                                <div>
+                                  <strong>{event.agent}</strong>
+                                  <small>{event.detail}</small>
+                                  {event.output && <details><summary>查看本角色产出</summary><p>{event.output}</p></details>}
+                                </div>
+                                <b>{event.status === "done" ? "完成" : event.status === "failed" ? "未返回" : "编排中"}</b>
+                              </article>
+                            ))}
+                          </div>
+                          {agentOrchestrationDraft && (
+                            <div className="agent-orchestration-draft">
+                              <header>
+                                <div><span>COUNCIL DRAFT</span><strong>{agentOrchestrationDraft.summary}</strong></div>
+                                <b>
+                                  {agentOrchestrationDraft.reviewVerdict === "approved" ? "模型审查通过" : "等待人工确认"}
+                                  {" · "}{agentOrchestrationDraft.modelProvider} · {agentOrchestrationDraft.model}
+                                </b>
+                              </header>
+                              <div className="agent-orchestration-layout">
+                                <section>
+                                  <span>角色编排</span>
+                                  {agentOrchestrationDraft.roles.map((role) => (
+                                    <article key={role.id}>
+                                      <strong>{role.name}</strong>
+                                      <small>{role.id}</small>
+                                      <p>{role.responsibility}</p>
+                                      <em>{role.deliverables.join(" · ")}</em>
+                                    </article>
+                                  ))}
+                                </section>
+                                <section>
+                                  <span>主工作流 · {agentOrchestrationDraft.workflow.length} 个执行步骤</span>
+                                  {agentOrchestrationDraft.workflow.map((step) => (
+                                    <article key={`${step.order}-${step.title}`}>
+                                      <b>{step.order}</b>
+                                      <div>
+                                        <strong>{step.title}</strong>
+                                        <small>{step.owner} → {step.output}</small>
+                                        <p>{step.acceptance.join("；")}</p>
+                                      </div>
+                                    </article>
+                                  ))}
+                                </section>
+                              </div>
+                              {!!agentOrchestrationDraft.risks.length && (
+                                <footer><span>审查保留项</span><p>{agentOrchestrationDraft.risks.join(" · ")}</p></footer>
+                              )}
+                            </div>
+                          )}
+                        </section>
+                      )}
+
+                      {agentCreationResult && (
+                        <section className="agent-certification">
+                          <header>
+                            <span><ShieldCheck size={17} /></span>
+                            <div><strong>{agentCreationResult.certification.level}</strong><small>标准体检 {agentCreationResult.certification.score}/100 · Contract {agentCreationResult.certification.standardVersion}</small></div>
+                          </header>
+                          <div>
+                            {agentCreationResult.certification.checks.map((check) => (
+                              <span className={check.passed ? "passed" : "failed"} key={check.id}>
+                                {check.passed ? <Check size={13} /> : <X size={13} />}{check.name}
+                              </span>
+                            ))}
+                          </div>
+                          <p>{agentCreationResult.certification.nextActions.join(" ")}</p>
+                        </section>
+                      )}
+
+                      {agentBuildError && (
+                        <div className="agent-launch-error">
+                          <strong>构建任务未创建</strong>
+                          <span>{agentBuildError}</span>
+                          <small>编排草案仍然保留，可以修复连接后直接重试，不需要重新设计。</small>
+                        </div>
+                      )}
+
+                      <footer>
+                        <span>{agentOrchestrating
+                          ? "真实子 Agent 正在 Agent 中心内分析和交叉审查；现在不会创建任务空间。"
+                          : agentOrchestrationDraft
+                            ? agentOrchestrationDraft.reviewVerdict === "approved"
+                              ? "草案已通过模型审查。确认后将创建正式任务，构建 Agent Card、角色、工作流、契约、引导与评测。"
+                              : "模型已形成完整草案并保留了风险项。请审阅；你的确认会作为人工批准，然后创建正式构建任务。"
+                            : "将启动一条可恢复的设计会话，由现有 Runtime 组织三名只读子 Agent；草案确认后才创建正式构建任务。"}</span>
+                        <div>
+                          {agentOrchestrating && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const result = await window.nova.agentPacks.cancelOrchestration();
+                                if (result.canceled) {
+                                  setAgentOrchestrating(false);
+                                  setAgentDesignSession((current) => current
+                                    ? { ...current, status: "cancelled" }
+                                    : current);
+                                  setNotice("本次设计会话已停止；输入仍然保留，可以调整后重新编排。");
+                                }
+                              }}
+                            >
+                              停止编排
+                            </button>
+                          )}
+                          {agentOrchestrationDraft && (
+                            <button type="submit" disabled={agentOrchestrating || agentCreating}>重新编排</button>
+                          )}
+                          <button
+                            type={agentOrchestrationDraft ? "button" : "submit"}
+                            className="primary"
+                            disabled={agentOrchestrating || agentCreating}
+                            onClick={agentOrchestrationDraft ? () => void createAgentPack() : undefined}
+                          >
+                            <Sparkles size={15} />
+                            {agentOrchestrating
+                              ? "正在多 Agent 设计…"
+                              : agentCreating
+                                ? "正在生成与体检…"
+                                : agentOrchestrationDraft
+                                  ? "确认方案并构建 Agent Pack"
+                                  : "开始多 Agent 设计"}
+                          </button>
+                        </div>
+                      </footer>
+                    </form>
+                  )}
+
+                  {agentPacksLoading && <p className="loading-row">正在读取 Agent Pack 注册表…</p>}
+                  {!agentPacksLoading && !agentPacks.length && (
+                    <p className="empty-row">尚未发现 Agent Pack。可以按照 Agent Pack SDK 创建并放入扩展目录。</p>
+                  )}
+
+                  <div className="agent-pack-grid">
+                    {agentPacks.map((pack) => (
+                      <article
+                        className={`${pack.enabled ? "enabled" : ""} ${selectedAgentPackId === pack.id ? "selected" : ""}`}
+                        key={pack.id}
+                      >
+                        <header>
+                          <span><Bot size={17} /></span>
+                          <div>
+                            <small>{pack.category} · v{pack.version}</small>
+                            <strong>{pack.name}</strong>
+                          </div>
+                          <b>{pack.status}</b>
+                        </header>
+                        <p>{pack.description}</p>
+                        <div className="agent-pack-facts">
+                          <span>{pack.agentCount} 个角色</span>
+                          <span>{pack.workflowCount} 条主流程</span>
+                          <span>{pack.declaredCapabilities.length} 项能力</span>
+                        </div>
+                        <footer>
+                          <button type="button" onClick={() => void inspectAgentPack(pack.id)}>查看结构</button>
+                          <button
+                            type="button"
+                            className={pack.enabled ? "enabled" : ""}
+                            onClick={async () => {
+                              await window.nova.agentPacks.setEnabled({
+                                id: pack.id,
+                                enabled: !pack.enabled
+                              });
+                              if (pack.enabled && selectedAgentPackId === pack.id) {
+                                setSelectedAgentPackId(null);
+                              }
+                              await loadAgentPacks();
+                            }}
+                          >
+                            {pack.enabled ? "已启用" : "启用"}
+                          </button>
+                          {pack.enabled && (
+                            <button
+                              type="button"
+                              className="primary"
+                              onClick={() => {
+                                void activateAgentPack(pack.id);
+                              }}
+                            >
+                              {selectedAgentPackId === pack.id ? "使用中" : "使用此 Agent"}
+                            </button>
+                          )}
+                          {!pack.builtIn && (
+                            <button
+                              type="button"
+                              className="danger"
+                              disabled={pack.enabled}
+                              title={pack.enabled ? "请先停用此 Agent，再将其移除" : "从本机移除此 Agent Pack"}
+                              onClick={async () => {
+                                try {
+                                  const result = await window.nova.agentPacks.remove({ id: pack.id });
+                                  if (result.canceled || !result.removed) return;
+                                  if (selectedAgentPackId === pack.id) setSelectedAgentPackId(null);
+                                  if (inspectedAgentPack?.summary.id === pack.id) setInspectedAgentPack(null);
+                                  await loadAgentPacks();
+                                  setNotice(`“${pack.name}”已从本机 Agent 扩展坞移除。`);
+                                } catch (error) {
+                                  setNotice(`Agent 移除失败：${error instanceof Error ? error.message : String(error)}`);
+                                }
+                              }}
+                            >
+                              <Trash2 size={14} />
+                              移除
+                            </button>
+                          )}
+                        </footer>
+                      </article>
+                    ))}
+                  </div>
+
+                  {inspectedAgentPack && (
+                    <section className="agent-pack-inspector">
+                      <header>
+                        <div>
+                          <span>{inspectedAgentPack.summary.category}</span>
+                          <strong>{inspectedAgentPack.summary.name}</strong>
+                          <small>{inspectedAgentPack.summary.id} · {inspectedAgentPack.summary.version}</small>
+                        </div>
+                        <button type="button" onClick={() => setInspectedAgentPack(null)}><X size={15} /></button>
+                      </header>
+                      <div className="agent-pack-inspector-grid">
+                        <section>
+                          <strong>可直接开始</strong>
+                          <div className="agent-starter-list">
+                            {inspectedAgentPack.summary.starterPrompts.map((prompt) => (
+                              <button
+                                type="button"
+                                key={prompt}
+                                disabled={!inspectedAgentPack.summary.enabled}
+                                onClick={() => {
+                                  void activateAgentPack(inspectedAgentPack.summary.id, false);
+                                  setDraft(prompt);
+                                  setNotice("专业 Agent 已装载；这是一条快捷任务，也可以打开启动引导补充更明确的资料");
+                                }}
+                              >
+                                {prompt}
+                              </button>
+                            ))}
+                          </div>
+                        </section>
+                        <section>
+                          <strong>工作流与角色</strong>
+                          {inspectedAgentPack.workflows.map((workflow) => (
+                            <details key={workflow.id} open>
+                              <summary>{workflow.name}<span>{workflow.stepCount} 步</span></summary>
+                              {workflow.steps.map((step) => (
+                                <div className="agent-workflow-step" key={step.id}>
+                                  <span>{step.agent}</span>
+                                  <strong>{step.title}</strong>
+                                  <small>{step.outputs.join(" · ") || "由工作流决定交付物"}</small>
+                                </div>
+                              ))}
+                            </details>
+                          ))}
+                        </section>
+                      </div>
+                      {inspectedAgentPack.certification && (
+                        <div className="agent-pack-certification-strip">
+                          <span><ShieldCheck size={14} /></span>
+                          <div>
+                            <strong>{inspectedAgentPack.certification.level}</strong>
+                            <small>NOVA Creation Standard {inspectedAgentPack.certification.standardVersion}</small>
+                          </div>
+                          <b>{inspectedAgentPack.certification.score}/100</b>
+                          <em>{inspectedAgentPack.certification.checks.filter((check) => check.passed).length}/{inspectedAgentPack.certification.checks.length} 项通过</em>
+                        </div>
+                      )}
+                      {agentCalibration && (
+                        <section className="agent-calibration-ledger">
+                          <header>
+                            <div>
+                              <span>校准版本账本</span>
+                              <strong>{agentCalibration.activeCount} 条规则正在生效</strong>
+                            </div>
+                            <small>当前 v{agentCalibration.version}</small>
+                          </header>
+                          {agentCalibration.patches.length === 0 ? (
+                            <p>还没有校准记录。审查交付物时，可以把一次纠正保存为这个 Agent 的长期工作规则。</p>
+                          ) : (
+                            <div className="agent-calibration-list">
+                              {agentCalibration.patches.slice(0, 8).map((patch) => (
+                                <article className={patch.state === "active" ? "active" : "rolled-back"} key={patch.id}>
+                                  <div>
+                                    <span>v{patch.version} · {calibrationScopeLabels[patch.scope]} · {calibrationCategoryLabels[patch.category]}</span>
+                                    <strong>{patch.instruction}</strong>
+                                    <small>{patch.scopeLabel} · 回归检查 {patch.regressionStatus === "pending" ? "待运行" : patch.regressionStatus}</small>
+                                  </div>
+                                  <button type="button" onClick={() => void rollbackAgentCalibration(patch)}>
+                                    {patch.state === "active" ? "停用" : "重新启用"}
+                                  </button>
+                                </article>
+                              ))}
+                            </div>
+                          )}
+                        </section>
+                      )}
+                      <footer>
+                        <span>权限声明：{inspectedAgentPack.permissions.length ? inspectedAgentPack.permissions.join("、") : "无额外权限"}</span>
+                        <span>外部发布、投放、账号与购买仍需独立授权</span>
+                      </footer>
+                    </section>
+                  )}
+                </div>
+              )}
 
               {settingsSection === "model" && (
                 <form className="dock-form" onSubmit={connectModel}>
@@ -1546,7 +3103,111 @@ function App() {
               )}
 
               {settingsSection === "mcp" && (
-                <div className="capability-list">
+                <div className="mcp-connect-center">
+                  <section className="mcp-quick-connect">
+                    <header>
+                      <div>
+                        <span>开放接入</span>
+                        <strong>把互联网上找到的 MCP 接进 NOVA</strong>
+                        <small>粘贴实际 MCP 服务地址、`mcpServers` JSON 或 Codex TOML；仓库/文档链接本身不会被误当成服务。</small>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={capabilityPreparing}
+                        onClick={() => void scanLocalMcpConfigurations()}
+                      >
+                        扫描本机配置
+                      </button>
+                    </header>
+                    <textarea
+                      rows={5}
+                      spellCheck={false}
+                      value={mcpConfigText}
+                      onChange={(event) => setMcpConfigText(event.target.value)}
+                      placeholder={'例如：https://mcp.example.com/mcp\n或从项目 README 粘贴 { "mcpServers": { ... } }'}
+                    />
+                    <label>
+                      <span>Authorization 环境变量名（可选）</span>
+                      <input
+                        value={mcpAuthorizationEnvironment}
+                        onChange={(event) => setMcpAuthorizationEnvironment(event.target.value)}
+                        placeholder="例如 MERCADOLIBRE_AUTHORIZATION"
+                        spellCheck={false}
+                      />
+                      <small>环境变量的值可设为 `Bearer 你的令牌`；NOVA 只保存变量名，不保存令牌。</small>
+                    </label>
+                    <div className="mcp-quick-actions">
+                      <button
+                        type="button"
+                        className="primary"
+                        disabled={capabilityPreparing || !mcpConfigText.trim()}
+                        onClick={() => void previewPastedMcpConfiguration()}
+                      >
+                        解析并审阅
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMcpConfigText(JSON.stringify({
+                            mcpServers: {
+                              "mercadolibre-official": {
+                                url: "https://mcp.mercadolibre.com/mcp",
+                                headers: { Authorization: "${MERCADOLIBRE_AUTHORIZATION}" }
+                              }
+                            }
+                          }, null, 2));
+                          setMcpAuthorizationEnvironment("MERCADOLIBRE_AUTHORIZATION");
+                        }}
+                      >
+                        Mercado Libre 示例
+                      </button>
+                    </div>
+                  </section>
+
+                  {mcpDiscovery && (
+                    <section className="mcp-discovery-review">
+                      <header>
+                        <div>
+                          <strong>发现结果</strong>
+                          <small>{mcpDiscovery.candidates.length} 个候选 · 默认不会启用</small>
+                        </div>
+                        <button type="button" onClick={() => setMcpDiscovery(null)}>清除</button>
+                      </header>
+                      {mcpDiscovery.candidates.map((candidate) => (
+                        <label className={!candidate.canImport ? "blocked" : ""} key={candidate.id}>
+                          <input
+                            type="checkbox"
+                            disabled={!candidate.canImport}
+                            checked={selectedMcpCandidates.has(candidate.id)}
+                            onChange={(event) => setSelectedMcpCandidates((current) => {
+                              const next = new Set(current);
+                              if (event.target.checked) next.add(candidate.id);
+                              else next.delete(candidate.id);
+                              return next;
+                            })}
+                          />
+                          <span>
+                            <strong>{candidate.name}</strong>
+                            <small>{candidate.sourceProduct} · {candidate.summary}</small>
+                            <em>{candidate.riskLabel} · {candidate.notes}</em>
+                          </span>
+                        </label>
+                      ))}
+                      {!!mcpDiscovery.warnings.length && (
+                        <p>{mcpDiscovery.warnings.slice(0, 2).join("；")}</p>
+                      )}
+                      <button
+                        type="button"
+                        className="primary"
+                        disabled={capabilityPreparing || selectedMcpCandidates.size === 0}
+                        onClick={() => void importSelectedMcpCandidates()}
+                      >
+                        登记所选并保持停用
+                      </button>
+                    </section>
+                  )}
+
+                  <div className="capability-list">
                   {capabilitiesLoading && <p className="loading-row">正在读取 MCP 注册表…</p>}
                   {!capabilitiesLoading && !capabilities?.mcp.length && (
                     <p className="empty-row">当前没有已注册 MCP，可在“组件”中选择并加载。</p>
@@ -1562,13 +3223,17 @@ function App() {
                             name: server.name,
                             enabled: !server.enabled
                           });
-                          await loadCapabilities();
+                          await Promise.all([
+                            loadCapabilities(),
+                            refreshAgentCapabilities()
+                          ]);
                         }}
                       >
                         {server.enabled ? "已启用" : "启用"}
                       </button>
                     </article>
                   ))}
+                  </div>
                 </div>
               )}
 
@@ -1589,13 +3254,135 @@ function App() {
                             id: skill.id,
                             enabled: !skill.enabled
                           });
-                          await loadCapabilities();
+                          await Promise.all([
+                            loadCapabilities(),
+                            refreshAgentCapabilities()
+                          ]);
                         }}
                       >
                         {skill.enabled ? "已启用" : "启用"}
                       </button>
                     </article>
                   ))}
+                </div>
+              )}
+
+              {settingsSection === "knowledge" && (
+                <div className="knowledge-center">
+                  <section className="knowledge-hero">
+                    <div>
+                      <span>LOCAL KNOWLEDGE</span>
+                      <strong>让工作区资料真正参与任务</strong>
+                      <small>
+                        索引只保存在本机；检索结果保留文件、行号和片段，方便核对来源。
+                      </small>
+                    </div>
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={!workspace || knowledgeLoading}
+                      onClick={() => void indexWorkspaceKnowledge()}
+                    >
+                      <RefreshCw size={15} className={knowledgeLoading ? "spinning" : ""} />
+                      {knowledgeLoading ? "正在更新" : knowledgeState?.count ? "更新索引" : "建立索引"}
+                    </button>
+                  </section>
+
+                  {!workspace ? (
+                    <section className="knowledge-empty">
+                      <BookOpen size={24} />
+                      <strong>先选择一个工作区</strong>
+                      <span>知识库会读取当前工程内的文档与代码，并建立可追溯的本地索引。</span>
+                      <button type="button" onClick={chooseWorkspace}>选择工作区</button>
+                    </section>
+                  ) : (
+                    <>
+                      <div className="knowledge-metrics">
+                        <article><span>已索引文件</span><strong>{knowledgeState?.count || 0}</strong></article>
+                        <article><span>知识片段</span><strong>{knowledgeState?.chunks || 0}</strong></article>
+                        <article><span>图谱节点</span><strong>{knowledgeState?.graph.nodeCount || 0}</strong></article>
+                        <article><span>关联关系</span><strong>{knowledgeState?.graph.edgeCount || 0}</strong></article>
+                      </div>
+
+                      <form className="knowledge-search" onSubmit={searchKnowledge}>
+                        <Search size={17} />
+                        <input
+                          value={knowledgeQuery}
+                          onChange={(event) => setKnowledgeQuery(event.target.value)}
+                          placeholder="搜索文件、事实、约束或历史结论"
+                        />
+                        <button type="submit" disabled={!knowledgeQuery.trim() || knowledgeLoading}>
+                          检索
+                        </button>
+                      </form>
+
+                      {knowledgeResults.length > 0 ? (
+                        <section className="knowledge-section">
+                          <header>
+                            <div><strong>检索结果</strong><small>{knowledgeResults.length} 条可追溯片段</small></div>
+                            <button type="button" onClick={() => setKnowledgeResults([])}>返回概览</button>
+                          </header>
+                          <div className="knowledge-results">
+                            {knowledgeResults.map((result, index) => (
+                              <article key={`${result.documentId}-${result.startLine}-${index}`}>
+                                <div>
+                                  <strong>{result.title}</strong>
+                                  <span>{result.relativePath} · 第 {result.startLine} 行</span>
+                                </div>
+                                <em>{Math.round(result.score * 100)}%</em>
+                                <p>{result.snippet}</p>
+                              </article>
+                            ))}
+                          </div>
+                        </section>
+                      ) : (
+                        <div className="knowledge-overview">
+                          <section className="knowledge-section">
+                            <header>
+                              <div><strong>最近索引</strong><small>{knowledgeState?.documents.length || 0} 个文件可检索</small></div>
+                              <span>
+                                {knowledgeState?.count
+                                  ? `更新于 ${new Date(knowledgeState.updatedAt).toLocaleString("zh-CN")}`
+                                  : "尚未建立索引"}
+                              </span>
+                            </header>
+                            {!knowledgeState?.documents.length ? (
+                              <p className="empty-row">点击“建立索引”，NOVA 会扫描当前工作区的可读资料。</p>
+                            ) : (
+                              <div className="knowledge-documents">
+                                {knowledgeState.documents.slice(0, 12).map((document) => (
+                                  <article key={document.id}>
+                                    <FileCode2 size={15} />
+                                    <div><strong>{document.title}</strong><small>{document.relativePath}</small></div>
+                                    <span>{document.chunkCount} 片段</span>
+                                  </article>
+                                ))}
+                              </div>
+                            )}
+                          </section>
+
+                          <section className="knowledge-section knowledge-graph-summary">
+                            <header>
+                              <div><strong>认知图谱</strong><small>从任务、能力和资料中提取关联</small></div>
+                            </header>
+                            {!knowledgeState?.graph.nodes.length ? (
+                              <p className="empty-row">建立索引后，这里会显示高权重知识节点。</p>
+                            ) : (
+                              <div className="knowledge-node-list">
+                                {knowledgeState.graph.nodes.slice(0, 10).map((node) => (
+                                  <article key={node.id}>
+                                    <span>{node.kind}</span>
+                                    <strong>{node.label}</strong>
+                                    <small>{node.detail}</small>
+                                  </article>
+                                ))}
+                              </div>
+                            )}
+                          </section>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
 
@@ -2006,7 +3793,7 @@ function App() {
                                 准备插件沙箱
                               </button>
                             )}
-                            {experiment.state === "ready" && experiment.isolatedWorkspace && (
+                            {["ready", "failed"].includes(experiment.state) && experiment.isolatedWorkspace && (
                               <button
                                 type="button"
                                 className="primary"
@@ -2384,6 +4171,119 @@ function App() {
         </div>
       )}
 
+      {deliveryReview && (
+        <div
+          className="modal-layer delivery-review-layer"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setDeliveryReview(null);
+          }}
+        >
+          <div className="delivery-review-modal">
+            <header>
+              <div>
+                <span>交付审查台</span>
+                <h2>{deliveryReview.title}</h2>
+                {deliveryReview.path && <small>{deliveryReview.path}</small>}
+              </div>
+              <button type="button" onClick={() => setDeliveryReview(null)}>
+                <X size={18} />
+              </button>
+            </header>
+            {deliveryReview.truncated && (
+              <div className="review-truncated">文件较大，当前显示前 600 KB 内容。</div>
+            )}
+            <div className={`delivery-review-content ${deliveryReview.kind}`}>
+              {deliveryReview.kind === "markdown"
+                ? <MarkdownContent content={deliveryReview.content} />
+                : <pre>{deliveryReview.content}</pre>}
+            </div>
+            <aside className="delivery-review-panel">
+              {selectedAgentPack && (
+                <div className="delivery-review-mode">
+                  <button
+                    type="button"
+                    className={deliveryReviewMode === "rework" ? "active" : ""}
+                    onClick={() => setDeliveryReviewMode("rework")}
+                  >
+                    只修改本次结果
+                  </button>
+                  <button
+                    type="button"
+                    className={deliveryReviewMode === "calibrate" ? "active" : ""}
+                    onClick={() => setDeliveryReviewMode("calibrate")}
+                  >
+                    校准 {selectedAgentPack.name}
+                  </button>
+                </div>
+              )}
+              {deliveryReviewMode === "calibrate" && selectedAgentPack && (
+                <div className="delivery-calibration-controls">
+                  <label>
+                    <span>哪里不合适</span>
+                    <select
+                      value={calibrationCategory}
+                      onChange={(event) => setCalibrationCategory(event.target.value as AgentCalibrationPatch["category"])}
+                    >
+                      {Object.entries(calibrationCategoryLabels).map(([value, label]) => (
+                        <option value={value} key={value}>{label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>生效范围</span>
+                    <select
+                      value={calibrationScope}
+                      onChange={(event) => setCalibrationScope(event.target.value as AgentCalibrationPatch["scope"])}
+                    >
+                      {Object.entries(calibrationScopeLabels).map(([value, label]) => (
+                        <option
+                          value={value}
+                          key={value}
+                          disabled={(value === "turn" && !selectedTaskId) || (value === "project" && !workspace)}
+                        >
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
+              <label>
+                <span>{deliveryReviewMode === "calibrate" ? "以后应该怎样处理" : "审查意见"}</span>
+                <textarea
+                  value={deliveryReviewNote}
+                  onChange={(event) => setDeliveryReviewNote(event.target.value)}
+                  placeholder={deliveryReviewMode === "calibrate"
+                    ? "例如：选品判断不能只看利润，必须同时评价真实需求、竞争密度、内容传播性和合规风险。"
+                    : "例如：结论不够明确、表格缺少价格列、请补充数据来源……"}
+                />
+              </label>
+              <div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeliveryReview(null);
+                    setDeliveryReviewNote("");
+                    setNotice("本项交付已由你审阅并保留。");
+                  }}
+                >
+                  通过并保留
+                </button>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => deliveryReviewMode === "calibrate"
+                    ? void saveAgentCalibration()
+                    : queueDeliveryRework()}
+                >
+                  {deliveryReviewMode === "calibrate" ? "保存校准并继续" : "提交修改意见"}
+                </button>
+              </div>
+            </aside>
+          </div>
+        </div>
+      )}
+
       {pendingArchiveTask && (
         <div className="modal-layer archive-confirm-layer">
           <div className="archive-confirm-modal">
@@ -2401,6 +4301,29 @@ function App() {
                 onClick={() => void archiveTask(pendingArchiveTask)}
               >
                 归档并保留记录
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingDeleteTask && (
+        <div className="modal-layer archive-confirm-layer">
+          <div className="archive-confirm-modal danger-confirm-modal">
+            <div className="archive-confirm-icon"><X size={21} /></div>
+            <div>
+              <span>永久删除归档记录</span>
+              <h2>删除“{pendingDeleteTask.title || "未命名任务"}”？</h2>
+              <p>任务对话、任务索引和行动日志将永久删除且无法恢复；用户工作区文件与已经生成的交付物不会被删除。</p>
+            </div>
+            <div className="archive-confirm-actions">
+              <button type="button" onClick={() => setPendingDeleteTask(null)}>取消</button>
+              <button
+                type="button"
+                className="danger"
+                onClick={() => void deleteArchivedTask(pendingDeleteTask)}
+              >
+                确认永久删除
               </button>
             </div>
           </div>
@@ -2431,6 +4354,14 @@ function App() {
                     <strong>{task.title || "未命名任务"}</strong>
                     <small>{taskSubtitle(task)}</small>
                   </div>
+                  <button
+                    type="button"
+                    className="archive-delete-action"
+                    onClick={() => setPendingDeleteTask(task)}
+                  >
+                    <X size={15} />
+                    删除记录
+                  </button>
                   <button type="button" onClick={() => void restoreArchivedTask(task)}>
                     <RefreshCw size={15} />
                     恢复到任务空间

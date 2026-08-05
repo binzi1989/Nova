@@ -85,6 +85,29 @@ public static class AutomaticAgentPlanner
         {
             goal = goal[..5000];
         }
+        if (goal.Contains("[NOVA_AGENT_WORKSHOP]", StringComparison.OrdinalIgnoreCase))
+        {
+            return new AutomaticAgentPlan(
+                "Agent 工坊多角色编排",
+                [
+                    new ParallelAgentTask(
+                        "行业架构师",
+                        $"目标：{goal}\n你处在并行设计阶段，不会看到其他子 Agent 的结果，也不需要等待或检查同伴产出。"
+                        + "从目标行业、服务对象、真实使用场景、必要资料、未知项和责任边界进行独立分析。"
+                        + "不要修改文件或编写代码，不要套用通用模板；明确事实、推断与需要用户验证的内容。"),
+                    new ParallelAgentTask(
+                        "工作流架构师",
+                        $"目标：{goal}\n你处在并行设计阶段，不会看到其他子 Agent 的结果，也不需要等待或检查同伴产出。"
+                        + "设计 2–6 个职责不重叠的 Agent 角色，以及 3–8 个存在清晰依赖关系的执行步骤。"
+                        + "不要修改文件；每一步必须声明负责人、真实交付物和可检查的验收条件。"),
+                    new ParallelAgentTask(
+                        "信任审查官",
+                        $"目标：{goal}\n你是并行阶段的独立风险审查员，不是最终裁决者。你不会看到其他子 Agent 的结果，"
+                        + "不得因为同伴产出尚未展示而拒绝设计，也不要声称 Supervisor 漏交材料。"
+                        + "只需检查角色重复、输入不足、虚假完成、越权风险、预算风险和不可验证交付；"
+                        + "不要修改文件，列出最终协调 Agent 形成可审阅草案时必须吸收的风险与验收条件。")
+                ]);
+        }
         if (ContainsAny(goal, ResearchSignals))
         {
             return new AutomaticAgentPlan(

@@ -81,6 +81,48 @@ public sealed class McpDiscoveryService
             .Select(group => group.First())
             .ToArray();
 
+    public IReadOnlyList<McpDiscoveryCandidate> PreviewConfiguration(
+        string text,
+        IReadOnlyCollection<McpServerRegistration> registeredServers)
+    {
+        text = text?.Trim() ?? string.Empty;
+        if (text.Length is 0 or > 100_000)
+        {
+            throw new InvalidOperationException(
+                "MCP configuration must contain 1-100,000 characters.");
+        }
+        var existingNames = registeredServers
+            .Select(server => server.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var source = new McpDiscoverySource("手动粘贴", "manual://clipboard", "auto");
+        if (Uri.TryCreate(text, UriKind.Absolute, out var endpoint))
+        {
+            var safeName = Regex.Replace(endpoint.Host, "[^A-Za-z0-9_.-]", "-")
+                .Trim('-', '.', '_');
+            if (safeName.Length > 64)
+            {
+                safeName = safeName[..64];
+            }
+            return
+            [
+                BuildCandidate(
+                    source,
+                    string.IsNullOrWhiteSpace(safeName) ? "remote-mcp" : safeName,
+                    string.Empty,
+                    [],
+                    "http",
+                    text,
+                    new Dictionary<string, string>(),
+                    new Dictionary<string, string>(),
+                    0,
+                    existingNames)
+            ];
+        }
+        return text.TrimStart().StartsWith('{')
+            ? ParseJson(source, text, existingNames)
+            : ParseCodexToml(source, text, existingNames);
+    }
+
     public async Task<McpDiscoveryResult> DiscoverAsync(
         IEnumerable<McpDiscoverySource> sources,
         IReadOnlyCollection<McpServerRegistration> registeredServers,
@@ -325,6 +367,11 @@ public sealed class McpDiscoveryService
             compatible = false;
             notes.Add("HTTP 地址必须为 HTTPS 或本机回环地址");
         }
+        else if (LooksLikeDocumentationPage(url))
+        {
+            compatible = false;
+            notes.Add("这是仓库或说明页，不是 MCP 服务地址；请粘贴页面提供的 mcpServers JSON、TOML 或实际 /mcp、/sse 端点");
+        }
 
         if (arguments.Any(argument => argument.IndexOfAny(['\0', '\r', '\n']) >= 0))
         {
@@ -490,6 +537,26 @@ public sealed class McpDiscoveryService
            && (endpoint.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
                || endpoint.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
                && endpoint.IsLoopback);
+
+    private static bool LooksLikeDocumentationPage(string? value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var endpoint))
+        {
+            return false;
+        }
+        var host = endpoint.Host.ToLowerInvariant();
+        var path = endpoint.AbsolutePath.TrimEnd('/').ToLowerInvariant();
+        if (host is "github.com" or "www.github.com" or "gitlab.com" or "www.gitlab.com")
+        {
+            return true;
+        }
+        var isLikelyEndpoint = path.EndsWith("/mcp", StringComparison.Ordinal)
+                               || path.EndsWith("/sse", StringComparison.Ordinal);
+        return !isLikelyEndpoint
+               && (path.Contains("/docs/", StringComparison.Ordinal)
+                   || path.Contains("/documentation/", StringComparison.Ordinal)
+                   || path.Contains("/portal/docs", StringComparison.Ordinal));
+    }
 
     private static string? ReadString(JsonNode? node)
     {

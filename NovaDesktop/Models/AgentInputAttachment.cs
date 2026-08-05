@@ -3,7 +3,8 @@ namespace NovaDesktop.Models;
 public enum AgentAttachmentKind
 {
     Image,
-    Text
+    Text,
+    Document
 }
 
 public sealed record AgentInputAttachment(
@@ -15,6 +16,8 @@ public sealed record AgentInputAttachment(
     long SizeBytes)
 {
     public bool IsImage => Kind == AgentAttachmentKind.Image;
+
+    public bool IsDocument => Kind == AgentAttachmentKind.Document;
 
     public string KindLabel => IsImage ? "图片" : "文件";
 

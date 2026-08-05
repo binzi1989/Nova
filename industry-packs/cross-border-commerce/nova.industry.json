@@ -1,0 +1,171 @@
+{
+  "manifestVersion": "1.0",
+  "id": "nova.cross-border-commerce",
+  "name": "NOVA 跨境商品决策 Agent",
+  "version": "0.3.0",
+  "status": "incubating",
+  "category": "跨境电商",
+  "description": "面向跨境卖家的通用商品识别、市场需求预判、证据研究、商业可行性与最小验证 Agent。",
+  "novaCompatibility": ">=1.0.3 <2.0.0",
+  "defaultLocale": "zh-CN",
+  "targetLocales": ["es-MX"],
+  "declaredCapabilities": [
+    "sku-product-passport",
+    "neutral-visual-product-identification",
+    "market-demand-reasoning",
+    "market-fit-scorecard",
+    "customer-problem-mapping",
+    "competitor-gap-analysis",
+    "minimum-market-validation",
+    "landed-profit-engine",
+    "market-evidence-ledger",
+    "public-market-research",
+    "product-selection-gate",
+    "localized-content-planning",
+    "evidence-backed-delivery"
+  ],
+  "permissions": [],
+  "capabilityRequirements": {
+    "version": "1.0",
+    "items": [
+      {
+        "id": "market-research-guidance",
+        "kind": "skill",
+        "name": "后台研究与证据综合",
+        "reason": "市场需求判断需要区分公开来源、事实、推断、反方证据和待验证项。",
+        "required": true,
+        "matchIds": ["research-synthesis"],
+        "catalogId": "research-synthesis"
+      },
+      {
+        "id": "interactive-site-research",
+        "kind": "mcp",
+        "name": "交互式网页调研",
+        "reason": "只有遇到必须交互、动态加载或需要页面操作的站点时才使用；普通公开资料优先后台读取。",
+        "required": false,
+        "matchIds": ["playwright-official", "playwright"],
+        "catalogId": "playwright-official"
+      },
+      {
+        "id": "mercadolibre-account-data",
+        "kind": "mcp",
+        "name": "Mercado Libre 官方 MCP",
+        "reason": "用户明确授权账号后，可读取店铺、商品和运营数据，减少仅凭公开页面推测。未授权时不影响公开市场研究。",
+        "required": false,
+        "matchIds": ["mercadolibre-official", "mercadolibre-mcp-server", "mercadolibre"],
+        "catalogId": "mercadolibre-official"
+      },
+      {
+        "id": "tiktok-business-data",
+        "kind": "mcp",
+        "name": "TikTok for Business MCP",
+        "reason": "用户明确授权广告或商业账号后，可把真实投放与内容表现纳入判断。NOVA 不保存文档中的密钥，也不会在未确认时访问账号。",
+        "required": false,
+        "matchIds": ["tiktok-for-business", "tiktok-business", "tiktok-ads"]
+      }
+    ]
+  },
+  "starterPrompts": [
+    "中立识别这张商品图片；不要套用历史案例，列出候选品类、置信度和最少确认问题",
+    "判断这个商品是否符合目标市场需求；同时分析痛点、使用频率、竞争、差异化、本地适配、内容表现和风险",
+    "调研消费者为什么可能购买或不购买，并建立带来源、日期、冲突和新鲜度的证据账本",
+    "先做需求适配判断，再结合利润与履约条件，给出进入测试、补充验证或暂缓建议",
+    "为最大的不确定项设计一个低成本市场验证方案，明确继续和停止标准"
+  ],
+  "onboarding": {
+    "version": "1.0",
+    "headline": "先认识商品，再判断市场",
+    "description": "不需要一次准备齐全。先给最确定的线索，NOVA 会标出还缺什么、为什么需要，以及怎样最低成本补齐。资料越具体，需求预判与建议越有参考价值。",
+    "steps": [
+      {
+        "id": "product-clue",
+        "title": "这是什么商品",
+        "description": "填写商品名、用途或你对它最确定的一句话。不知道名称时可写“见附件，请先中立识别”。",
+        "kind": "text",
+        "required": true,
+        "placeholder": "例如：一款家用六头吸顶灯；或：见附件，请先识别",
+        "options": [],
+        "whyItMatters": "用于建立本轮商品身份，防止历史案例或相似外观污染判断。",
+        "example": "已知用途、品牌、型号、尺寸中的任意一项都很有帮助。"
+      },
+      {
+        "id": "product-files",
+        "title": "添加图片或资料",
+        "description": "优先提供产品正面、侧面、包装、铭牌/标签、尺寸参照和使用场景；有规格表、链接或视频也可一起添加。",
+        "kind": "attachment",
+        "required": false,
+        "placeholder": "支持图片和文本资料",
+        "options": [],
+        "whyItMatters": "多角度与标签信息能显著提高品类、材质、接口、规格和风险识别的可靠度。",
+        "example": "不要只拍美化主图；包装背面、铭牌和尺寸对照通常更有判断价值。"
+      },
+      {
+        "id": "target-market",
+        "title": "准备卖到哪里",
+        "description": "选择主要目标市场；如果还没决定，NOVA 会先比较候选市场，不会继承上一任务。",
+        "kind": "select",
+        "required": true,
+        "placeholder": "选择目标市场",
+        "options": ["墨西哥", "美国", "欧洲", "东南亚", "中东", "尚未确定"] ,
+        "whyItMatters": "同一商品在不同国家的需求场景、价格接受度、合规和竞争结构可能完全不同。",
+        "example": "最好具体到国家；“欧洲”只能用于早期粗筛。"
+      },
+      {
+        "id": "platform",
+        "title": "主要销售渠道",
+        "description": "选择准备验证的主渠道。尚未确定时，NOVA 会把渠道选择列为待验证项。",
+        "kind": "select",
+        "required": true,
+        "placeholder": "选择销售渠道",
+        "options": ["TikTok Shop", "Mercado Libre", "Amazon", "独立站", "线下分销", "尚未确定"],
+        "whyItMatters": "平台决定内容形式、费用、消费者预期、可用数据和首轮验证方式。",
+        "example": "如果多个平台都做，先选择本轮最想验证的一个。"
+      },
+      {
+        "id": "known-data",
+        "title": "你已经知道的数据",
+        "description": "可填写售价、成本、规格、认证、库存、竞品链接、评论、历史销量或投放表现；不知道的留空即可。",
+        "kind": "text",
+        "required": false,
+        "placeholder": "例如：售价 432 MXN；采购成本待确认；有 2 个竞品链接",
+        "options": [],
+        "whyItMatters": "这些信息用于提高证据覆盖、校验需求假设并识别最可能影响建议的未知项。",
+        "example": "请区分实际数据和个人判断；NOVA 会保留二者的边界。"
+      }
+    ],
+    "outcomes": [
+      {
+        "id": "identify",
+        "title": "先识别商品",
+        "description": "适合只有图片或名称不确定的情况。",
+        "promptTemplate": "请中立识别本轮商品，不得套用任何历史案例。商品线索：{{product-clue}}。附件：{{product-files}}。列出图中直接可见事实、视觉推断、未知项、最多三个候选品类及置信度，并只问能够显著缩小范围的最少问题。"
+      },
+      {
+        "id": "demand",
+        "title": "判断市场需求",
+        "description": "重点分析消费者需求、竞争、差异化、本地适配和风险，不以利润代替需求。",
+        "promptTemplate": "请判断该商品是否可能符合{{target-market}}市场、{{platform}}渠道的需求预期。商品线索：{{product-clue}}。附件：{{product-files}}。已知数据：{{known-data}}。先确认商品身份，再研究痛点强度、人群范围、使用频率、市场活动、竞争空间、差异化、内容可演示性、本地适配、信任门槛、合规、退货售后和季节性。调用需求适配工具，区分事实、推断、未知项和反方解释，最终给出建议与最小验证动作；不得预测确定销量或必然成功。"
+      },
+      {
+        "id": "validate",
+        "title": "设计低成本验证",
+        "description": "先验证最可能推翻判断的假设，再决定是否投入。",
+        "promptTemplate": "基于{{target-market}}和{{platform}}，为商品“{{product-clue}}”设计最小市场验证。附件：{{product-files}}。已知数据：{{known-data}}。先列出需求判断中最危险的未知项，再为每项给出测试对象、渠道、素材、有效信号、继续标准、停止标准、预算和周期上限。区分点击兴趣、购买意向和真实成交。"
+      },
+      {
+        "id": "full",
+        "title": "完整商品决策包",
+        "description": "从识别、需求、证据、商业可行性到市场测试建议完整执行。",
+        "promptTemplate": "请为商品“{{product-clue}}”完成{{target-market}}市场、{{platform}}渠道的完整跨境商品判断。附件：{{product-files}}。已知数据：{{known-data}}。依次完成中立识别、商品档案、市场证据、需求适配评分、财务与履约条件、最小验证计划和最终建议。缺失财务数据时继续完成非财务分析并明确待确认项；所有结论保留来源、反方证据与不确定性。"
+      }
+    ]
+  },
+  "externalActions": {
+    "publishing": "approval-required",
+    "advertising": "approval-required",
+    "accountAccess": "approval-required",
+    "purchasing": "not-supported"
+  },
+  "entryWorkflow": "workflows/cross-border-product-demand-validation.json",
+  "evaluationSuite": "evaluations/generic-market-demand-001.json"
+}

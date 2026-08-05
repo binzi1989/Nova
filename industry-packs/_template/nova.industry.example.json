@@ -1,0 +1,104 @@
+{
+  "$schema": "../nova.industry.schema.json",
+  "manifestVersion": "1.0",
+  "id": "nova.replace-with-industry",
+  "name": "NOVA Industry Agent",
+  "version": "0.1.0",
+  "status": "incubating",
+  "category": "待定义行业",
+  "description": "用一句话说明客户、任务和可检查结果。",
+  "novaCompatibility": ">=1.0.4 <2.0.0",
+  "creationStandard": {
+    "version": "1.0",
+    "scenarioProfile": "research",
+    "autonomyLevel": "assist",
+    "lifecycle": "project",
+    "collaborationMode": "independent",
+    "deliveryMode": "document",
+    "decisionStyle": "balanced"
+  },
+  "inputContract": {
+    "required": ["任务目标"],
+    "recommended": ["现有资料"],
+    "missingDataPolicy": "preserve-unknowns-and-lower-confidence"
+  },
+  "outputContract": {
+    "primaryArtifact": "行业任务结果.md",
+    "mustPersist": true,
+    "evidenceRequired": true,
+    "proofOfDoneRequired": true
+  },
+  "calibrationContract": {
+    "scopes": ["turn", "project", "agent", "organization"],
+    "patchOnly": true,
+    "regressionRequired": true,
+    "rollbackRequired": true
+  },
+  "collaborationContract": {
+    "mode": "independent",
+    "typedDelegationRequired": true,
+    "artifactHandoffRequired": true,
+    "maxDelegationDepth": 0
+  },
+  "declaredCapabilities": ["replace-with-capability"],
+  "permissions": [],
+  "starterPrompts": ["描述一个该行业最常见、最耗时并可验收的目标"],
+  "capabilityRequirements": {
+    "version": "1.0",
+    "items": [
+      {
+        "id": "research-guidance",
+        "kind": "skill",
+        "name": "研究与证据综合",
+        "reason": "帮助 Agent 区分来源、事实、推断和待验证项。",
+        "required": false,
+        "matchIds": ["research-synthesis"],
+        "catalogId": "research-synthesis"
+      }
+    ]
+  },
+  "onboarding": {
+    "version": "1.0",
+    "headline": "用最少资料开始",
+    "description": "告诉用户先提供什么、为什么需要，以及缺少资料时系统会如何降级。",
+    "steps": [
+      {
+        "id": "goal",
+        "title": "想达成什么结果",
+        "description": "用一句话描述最终希望拿到的结果。",
+        "kind": "text",
+        "required": true,
+        "placeholder": "例如：判断这份报价是否值得接受",
+        "options": [],
+        "whyItMatters": "目标决定工作流、证据范围与交付标准。",
+        "example": "尽量包含对象、范围和使用场景。"
+      },
+      {
+        "id": "materials",
+        "title": "添加现有资料",
+        "description": "上传已有文件；不齐全也可以开始。",
+        "kind": "attachment",
+        "required": false,
+        "placeholder": "添加图片或文件",
+        "options": [],
+        "whyItMatters": "原始材料越完整，结论越能追溯。",
+        "example": "合同、表格、图片或历史记录。"
+      }
+    ],
+    "outcomes": [
+      {
+        "id": "start",
+        "title": "开始分析",
+        "description": "基于当前线索开始，缺失内容以未知项保留。",
+        "promptTemplate": "目标：{{goal}}。现有资料：{{materials}}。请先检查输入完整性，再按 Agent Pack 工作流执行；不得虚构缺失数据。"
+      }
+    ]
+  },
+  "externalActions": {
+    "publishing": "approval-required",
+    "accountAccess": "approval-required",
+    "purchasing": "not-supported"
+  },
+  "entryWorkflow": "workflows/entry-workflow.json",
+  "evaluationSuite": "evaluations/case-001.json"
+}

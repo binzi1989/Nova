@@ -99,7 +99,31 @@ public sealed class AgentSupervisorService : IDisposable
                 {
                     _leases.TryGetValue(task.Id, out owner);
                 }
-                throw new AgentLeaseConflictException(task.Id, owner, exception);
+                // A previous host can finish the model call and then crash while
+                // committing complete_task. The persisted checkpoint is terminal,
+                // but that process may still keep the old file handle open. Use an
+                // epoch-scoped recovery lock only for this explicit terminal state;
+                // live work can never be stolen by this path.
+                if (owner is not null && IsTerminalCheckpoint(owner))
+                {
+                    try
+                    {
+                        taskLeaseHandle = AcquireRecoveryTaskLock(
+                            task.Id,
+                            Math.Max(1, owner.Epoch + 1));
+                    }
+                    catch (IOException recoveryException)
+                    {
+                        throw new AgentLeaseConflictException(
+                            task.Id,
+                            owner,
+                            new AggregateException(exception, recoveryException));
+                    }
+                }
+                else
+                {
+                    throw new AgentLeaseConflictException(task.Id, owner, exception);
+                }
             }
 
             AgentSupervisorLease lease;
@@ -243,11 +267,20 @@ public sealed class AgentSupervisorService : IDisposable
                     changed = true;
                 }
             }
-            if (changed)
+            try
             {
-                await PersistUnsafeAsync(cancellationToken);
+                if (changed)
+                {
+                    await PersistUnsafeAsync(cancellationToken);
+                }
             }
-            ReleaseTaskLock(task.Id);
+            finally
+            {
+                // Never leave a process-owned file lease behind just because the
+                // durable state write failed. The snapshot can be recovered; a
+                // leaked lock prevents every future retry from making progress.
+                ReleaseTaskLock(task.Id);
+            }
         }
         finally
         {
@@ -349,6 +382,37 @@ public sealed class AgentSupervisorService : IDisposable
             FileShare.None,
             1,
             FileOptions.WriteThrough);
+    }
+
+    private FileStream AcquireRecoveryTaskLock(string taskId, long epoch)
+    {
+        Directory.CreateDirectory(_taskLockRoot);
+        return new FileStream(
+            Path.Combine(
+                _taskLockRoot,
+                $"{NormalizeTaskId(taskId)}.recovery-{epoch}.lock"),
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.None,
+            1,
+            FileOptions.WriteThrough);
+    }
+
+    private static bool IsTerminalCheckpoint(AgentSupervisorLease lease)
+    {
+        if (lease.State is AgentSupervisorLeaseState.Completed
+                or AgentSupervisorLeaseState.Failed
+                or AgentSupervisorLeaseState.Cancelled
+                or AgentSupervisorLeaseState.BudgetExhausted)
+        {
+            return true;
+        }
+
+        var checkpoint = lease.Checkpoint ?? string.Empty;
+        return checkpoint.Contains("任务完成", StringComparison.OrdinalIgnoreCase)
+               || checkpoint.Contains("模型完成", StringComparison.OrdinalIgnoreCase)
+               || checkpoint.Contains("task completed", StringComparison.OrdinalIgnoreCase)
+               || checkpoint.Contains("model completed", StringComparison.OrdinalIgnoreCase);
     }
 
     private bool CanAcquireTaskLock(string taskId)

@@ -2,12 +2,13 @@
 
 ## Supported versions
 
-当前仅维护最新 Preview。历史 Preview 不接收安全修复。
+当前仅维护最新 Preview 与最新稳定 Release。更早版本不接收安全修复。
 
 | Version | Supported |
 |---|---|
-| 0.9.0-preview.29 | Yes |
-| Earlier previews | No |
+| 1.1.0-preview.x | Yes |
+| 1.0.3 | Yes |
+| Earlier releases / previews | No |
 
 ## Reporting a vulnerability
 
