@@ -1,4 +1,4 @@
-<p align="center"> <strong>简体中文</strong> · <a href="README_EN.md">English</a></p>\n\n<p align="center">
+<p align="center"> <strong>简体中文</strong> · <a href="README_EN.md">English</a></p><p align="center">
   <img src="assets/branding/nova-github-banner.svg" alt="NOVA AgentOS" width="100%" />
 </p>
 
