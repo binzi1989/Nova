@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "NOVA 脉脉安全采集",
+  "version": "1.0.0",
+  "description": "仅在用户点击时读取当前脉脉页面的可见信息，并保存到 NOVA 本地加密仓。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygPfbD0pkLNBcGBdAA/mahvufD5foqfEKE1UvR888KhOx4ovObiXAau0mGuADnAZ/asZJ76o7W3N1cKF+ktA+i24Xu4cYvg+b3JGv+ULYq1r+eRwtkFcQOn8GfWSupaxlrbozrU5WoSXA9i66X0cnXtwwTXptZ9pSWPe4ENu4xhf+sDI7gyGW7meTLr/q8hkInZ9dO9/vc+TAF1S3YzCNxL2UsC7oGx22JAl5fvZX84cYpPas4VJeFdmQnIvbKBdZ+dBJGZoqczJ/CL+3JCt6sogCbp+P5tcYY+zq3b/5cothMqi/ILK5aEA8Pxnmo3wBBXNN0/7U8X1dgHKu4SpiwIDAQAB",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "nativeMessaging",
+    "storage"
+  ],
+  "action": {
+    "default_title": "保存当前脉脉页面到 NOVA",
+    "default_popup": "popup.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  }
+}

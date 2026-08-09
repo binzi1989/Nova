@@ -2562,11 +2562,75 @@ await CheckAsync("cognitive knowledge graph persistence", async () =>
         Expect(graph.Nodes.Any(node => node.Kind == "Skill"), "Graph did not create a skill node.");
         Expect(graph.Edges.Count > 0, "Graph did not create relationships.");
 
+        var firstInput = await service.IngestInputAsync(
+            new KnowledgeInputRecord(
+                "input-one",
+                "graph-task",
+                "Native agent architecture",
+                @"D:\Agent",
+                "market product evidence launch budget",
+                DateTimeOffset.Now),
+            CancellationToken.None);
+        var secondInput = await service.IngestInputAsync(
+            new KnowledgeInputRecord(
+                "input-two",
+                "graph-task",
+                "Native agent architecture",
+                @"D:\Agent",
+                "product market evidence delivery validation",
+                DateTimeOffset.Now.AddSeconds(1)),
+            CancellationToken.None);
+        var inputGraph = service.GetSnapshot();
+        Expect(inputGraph.Nodes.Count(node => node.Kind == "Input") == 2, "User inputs were not captured as knowledge nodes.");
+        Expect(inputGraph.Edges.Any(edge => edge.IsInferred && edge.Relation == "potential mapping"), "Shared concepts did not create a reviewable mapping.");
+        var suggested = inputGraph.Edges.First(edge => edge.IsInferred && edge.Relation == "potential mapping");
+        var accepted = await service.ReviewMappingAsync(suggested.SourceId, suggested.TargetId, true, CancellationToken.None);
+        Expect(!accepted.IsInferred && accepted.ReviewState == "accepted", "Confirmed mapping did not become evidence-backed knowledge.");
+        var thirdInput = await service.IngestInputAsync(
+            new KnowledgeInputRecord(
+                "input-three",
+                "graph-task",
+                "Native agent architecture",
+                @"D:\Agent",
+                "product market evidence research recommendation",
+                DateTimeOffset.Now.AddSeconds(2)),
+            CancellationToken.None);
+        var rejectedCandidate = service.GetSnapshot().Edges.First(edge =>
+            edge.IsInferred
+            && edge.Relation == "potential mapping"
+            && (edge.SourceId == thirdInput.Id || edge.TargetId == thirdInput.Id));
+        var rejected = await service.ReviewMappingAsync(
+            rejectedCandidate.SourceId,
+            rejectedCandidate.TargetId,
+            false,
+            CancellationToken.None);
+        Expect(rejected.ReviewState == "rejected", "Rejected mapping decision was not persisted.");
+        Expect(!service.CreateView(@"D:\Agent").Edges.Any(edge =>
+            edge.SourceId == rejected.SourceId
+            && edge.TargetId == rejected.TargetId), "Rejected mapping remained visible in the knowledge network.");
+        var workspaceView = service.CreateView(@"D:\Agent");
+        Expect(workspaceView.Nodes.Any(node => node.Id == firstInput.Id), "Workspace knowledge view omitted its user input.");
+        Expect(firstInput.SourceType == "conversation" && firstInput.IsDeletable, "Input provenance or deletion policy was not retained.");
+        Expect(await service.DeleteNodeAsync(secondInput.Id), "Deletable input node was not removed.");
+        Expect(!service.GetSnapshot().Nodes.Any(node => node.Id == secondInput.Id), "Deleted input node remained in the graph.");
+
         var related = graph.Nodes.First().Id;
         await service.AddKnowledgeAsync("Prefer native UI", "Avoid browser shells for the desktop client.", related, CancellationToken.None);
         var restored = new KnowledgeGraphService(Path.Combine(temporaryDirectory, "graph.json")).GetSnapshot();
         Expect(restored.Nodes.Any(node => node.IsManual && node.Label == "Prefer native UI"), "Manual knowledge did not persist.");
         Expect(service.QueryJson("native", 20).Contains("Native agent architecture", StringComparison.OrdinalIgnoreCase), "Graph query did not return matching knowledge.");
+
+        var wikiRoot = Path.Combine(temporaryDirectory, "knowledge-wiki");
+        var knowledgeOs = new KnowledgeOperatingSystemService(wikiRoot)
+            .Compile(service.CreateView(@"D:\Agent"), @"D:\Agent");
+        Expect(knowledgeOs.SchemaVersion == "nova.knowledge-os/1.0", "Knowledge OS schema version is incorrect.");
+        Expect(knowledgeOs.EntityTypes.Count >= 8, "Ontology did not expose the expected entity types.");
+        Expect(knowledgeOs.RelationTypes.Count >= 8, "Ontology did not expose the expected relation types.");
+        Expect(knowledgeOs.WikiPages.Count > 0, "Knowledge OS produced no readable wiki pages.");
+        Expect(knowledgeOs.Decisions.Count == 4, "Rules engine did not produce a stable decision set.");
+        Expect(File.Exists(Path.Combine(knowledgeOs.WikiRoot, "ontology.schema.json")), "Ontology schema was not persisted.");
+        Expect(File.Exists(Path.Combine(knowledgeOs.WikiRoot, "rules.json")), "Knowledge rules were not persisted.");
+        Expect(knowledgeOs.WikiPages.Any(page => File.Exists(page.PagePath)), "Knowledge wiki markdown was not persisted.");
     }
     finally
     {
@@ -6063,8 +6127,9 @@ await CheckAsync("Electron top-level workspace approval contract", async () =>
         && bridgeSource.Contains("自动审核通过", StringComparison.Ordinal),
         "Automatic review does not cover bounded research and Agent collaboration.");
     Expect(
-        electronSource.Contains("智能审核后执行", StringComparison.Ordinal)
-        && electronSource.Contains("越界操作不会自动执行", StringComparison.Ordinal),
+        electronSource.Contains("工作区智能审核（推荐）", StringComparison.Ordinal)
+        && electronSource.Contains("遇到新边界或高风险动作时再单独问你", StringComparison.Ordinal)
+        && electronSource.Contains("本任务后续对话沿用此选择", StringComparison.Ordinal),
         "The execution confirmation does not explain the automatic review boundary.");
     Expect(
         bridgeSource.Contains(
@@ -6086,6 +6151,37 @@ await CheckAsync("Electron top-level workspace approval contract", async () =>
         && electronStyles.Contains(".markdown-body table", StringComparison.Ordinal)
         && electronStyles.Contains(".markdown-body pre", StringComparison.Ordinal),
         "Assistant Markdown is not rendered as a structured, readable document.");
+    var newTaskStart = electronSource.IndexOf(
+        "async function createTaskWithWorkspace(",
+        StringComparison.Ordinal);
+    var chooseWorkspace = electronSource.IndexOf(
+        "await chooseWorkspace()",
+        newTaskStart,
+        StringComparison.Ordinal);
+    var resetTask = electronSource.IndexOf(
+        "resetTaskState()",
+        chooseWorkspace,
+        StringComparison.Ordinal);
+    Expect(
+        newTaskStart >= 0 && chooseWorkspace > newTaskStart && resetTask > chooseWorkspace,
+        "A new task does not select its workspace before resetting the active task surface.");
+    Expect(
+        electronSource.Contains("先选择成果保存的位置", StringComparison.Ordinal)
+        && electronSource.Contains("成果也保存在这里", StringComparison.Ordinal)
+        && electronSource.Contains("recentTaskWorkspaces", StringComparison.Ordinal)
+        && electronStyles.Contains("calm-light workspace", StringComparison.Ordinal),
+        "The new-task flow no longer explains the delivery directory or the calm-light workspace theme is missing.");
+    Expect(
+        bridgeSource.Contains("\"approval_request\"", StringComparison.Ordinal)
+        && bridgeSource.Contains("resolve_tool_approval", StringComparison.Ordinal)
+        && electronSource.Contains("tool-approval-modal", StringComparison.Ordinal)
+        && electronSource.Contains("本任务内相同能力不再询问", StringComparison.Ordinal),
+        "Mid-run permission boundaries are not visible and resolvable in the Electron shell.");
+    Expect(
+        electronSource.Contains("当前正在做", StringComparison.Ordinal)
+        && electronSource.Contains("当前步骤 · 下一步 · 阶段产出", StringComparison.Ordinal)
+        && electronSource.Contains("currentRuntimeEvent?.action", StringComparison.Ordinal),
+        "The execution panel does not explain the model's current step.");
 });
 
 await CheckAsync("Electron 1.0 trustworthy cross-model delivery contract", async () =>

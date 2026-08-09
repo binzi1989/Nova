@@ -30,6 +30,89 @@ async Task WriteProtocolAsync(object message)
     }
 }
 
+if (args.Contains("--smoke-context", StringComparer.OrdinalIgnoreCase))
+{
+    var smokeRoot = Path.Combine(
+        Path.GetTempPath(),
+        "nova-context-smoke-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var workspaceRoot = Path.Combine(smokeRoot, "workspace");
+        Directory.CreateDirectory(workspaceRoot);
+        await File.WriteAllTextAsync(
+            Path.Combine(workspaceRoot, "README.md"),
+            "# Context Capsule\nElectron Bridge CLI Gateway context budget cache.");
+        await File.WriteAllTextAsync(
+            Path.Combine(workspaceRoot, "ContextCompiler.cs"),
+            "public sealed class ContextCompiler { public string Compile() => \"Task Capsule\"; }");
+        var adaptive = new AdaptiveContextCompilerService(Path.Combine(smokeRoot, "adaptive"));
+        var capsules = new TaskCapsuleService(adaptive, Path.Combine(smokeRoot, "capsules"));
+        var capsule = await capsules.CompileAsync(
+            "context-smoke",
+            workspaceRoot,
+            "检查 Electron Bridge、CLI、Gateway 和 Task Capsule 的上下文预算实现",
+            AgentExecutionMode.Build,
+            "用户要求继续 P1，并优先减少重复上下文 Token。",
+            "Agent 必须形成可验证交付。",
+            string.Empty,
+            "偏好：先说结果。",
+            120_000);
+        var serialized = JsonSerializer.Serialize(capsule, options);
+        var reusedCapsule = await capsules.CompileAsync(
+            "context-smoke-reused",
+            workspaceRoot,
+            capsule.Goal,
+            AgentExecutionMode.Build,
+            "Repeated task context must reuse an unchanged workspace evidence pack.",
+            "Agent must produce a verifiable delivery.",
+            string.Empty,
+            "Preference: lead with the outcome.",
+            120_000);
+        await File.AppendAllTextAsync(
+            Path.Combine(workspaceRoot, "ContextCompiler.cs"),
+            "\n// Cache invalidation probe " + Guid.NewGuid().ToString("N"));
+        var invalidatedCapsule = await capsules.CompileAsync(
+            "context-smoke-invalidated",
+            workspaceRoot,
+            capsule.Goal,
+            AgentExecutionMode.Build,
+            "A changed workspace file must invalidate the shared evidence cache.",
+            "Agent must produce a verifiable delivery.",
+            string.Empty,
+            "Preference: lead with the outcome.",
+            120_000);
+        if (capsule.UsedCharacters <= 0
+            || capsule.UsedCharacters > capsule.CharacterBudget
+            || capsule.Layers.Count < 5
+            || capsule.Fingerprint.Length != 64
+            || serialized.Contains("runtimeContext", StringComparison.OrdinalIgnoreCase)
+            || capsule.ContextCacheHit
+            || !reusedCapsule.ContextCacheHit
+            || string.IsNullOrWhiteSpace(reusedCapsule.ContextSourceFingerprint)
+            || !string.Equals(
+                capsule.ContextSourceFingerprint,
+                reusedCapsule.ContextSourceFingerprint,
+                StringComparison.OrdinalIgnoreCase)
+            || invalidatedCapsule.ContextCacheHit
+            || string.Equals(
+                capsule.ContextSourceFingerprint,
+                invalidatedCapsule.ContextSourceFingerprint,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Task Capsule smoke contract failed.");
+        }
+        Console.WriteLine(
+            $"NOVA_CONTEXT_CAPSULE_SMOKE_OK used={capsule.UsedCharacters} "
+            + $"budget={capsule.CharacterBudget} files={capsule.Selections.Count} "
+            + $"avoidedTokens={capsule.EstimatedTokensAvoided} cacheHit={reusedCapsule.ContextCacheHit}");
+    }
+    finally
+    {
+        if (Directory.Exists(smokeRoot)) Directory.Delete(smokeRoot, recursive: true);
+    }
+    return;
+}
+
 using var host = new AgentOsBridgeHost(
     (eventName, payload) => WriteProtocolAsync(new BridgeNotification(eventName, payload)));
 
@@ -89,6 +172,10 @@ internal sealed record BridgeRequest(string Id, string Method, JsonObject? Param
 internal sealed record BridgeResponse(string Id, object? Result, BridgeError? Error);
 internal sealed record BridgeError(string Code, string Message);
 internal sealed record BridgeNotification(string Event, object Payload);
+internal sealed record PendingToolApproval(
+    string TaskId,
+    string ToolName,
+    TaskCompletionSource<bool> Completion);
 
 internal sealed class AgentOsBridgeHost : IDisposable
 {
@@ -100,6 +187,8 @@ internal sealed class AgentOsBridgeHost : IDisposable
     private readonly TaskSnapshotService _snapshots = new();
     private readonly TaskJournalService _journal = new();
     private readonly ConversationHistoryService _conversations = new();
+    private readonly TaskCapsuleService _taskCapsules = new();
+    private readonly DeliveryContractService _deliveries = new();
     private readonly McpRegistryService _mcpRegistry = new();
     private readonly SkillRegistryService _skillRegistry = new();
     private readonly AgentScheduleService _schedules = new();
@@ -112,6 +201,7 @@ internal sealed class AgentOsBridgeHost : IDisposable
     private readonly AgentCalibrationService _agentCalibrations = new();
     private readonly KnowledgeIndexService _knowledgeIndex = new();
     private readonly KnowledgeGraphService _knowledgeGraph = new();
+    private readonly KnowledgeOperatingSystemService _knowledgeOperatingSystem = new();
     private readonly ConcurrentDictionary<string, TaskItem> _active =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _startGates =
@@ -121,6 +211,10 @@ internal sealed class AgentOsBridgeHost : IDisposable
     private readonly ConcurrentDictionary<string, McpDiscoveryCandidate> _mcpDiscoveryCandidates =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _runCancellations =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, PendingToolApproval> _pendingToolApprovals =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _rememberedToolApprovals =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _bootGate = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
@@ -154,17 +248,24 @@ internal sealed class AgentOsBridgeHost : IDisposable
             "list_tasks" => await ListTasksAsync(),
             "list_archived_tasks" => await ListArchivedTasksAsync(),
             "get_task" => await GetTaskAsync(parameters),
+            "get_task_capsule" => GetTaskCapsule(parameters),
+            "compile_task_capsule" => await CompileTaskCapsuleAsync(parameters),
+            "get_context_budget" => GetContextBudget(parameters),
             "archive_task" => await ArchiveTaskAsync(parameters),
             "restore_task" => await RestoreArchivedTaskAsync(parameters),
             "delete_archived_task" => await DeleteArchivedTaskAsync(parameters),
             "start_task" => await StartTaskAsync(parameters),
             "run_agent" => await RunAgentAsync(parameters),
+            "resolve_tool_approval" => ResolveToolApproval(parameters),
             "run_design_session" => await RunDesignSessionAsync(parameters),
             "cancel_task" => await CancelTaskAsync(parameters),
             "cancel_design_session" => CancelDesignSession(parameters),
             "verify_result" => await VerifyResultAsync(parameters),
             "task_event" => await AppendEventAsync(parameters),
             "complete_task" => await CompleteTaskAsync(parameters),
+            "submit_delivery_feedback" => await SubmitDeliveryFeedbackAsync(parameters),
+            "accept_delivery" => await AcceptDeliveryAsync(parameters),
+            "extract_delivery_document" => await ExtractDeliveryDocumentAsync(parameters),
             "list_capabilities" => await ListCapabilitiesAsync(parameters),
             "set_mcp_enabled" => await SetMcpEnabledAsync(parameters),
             "set_skill_enabled" => await SetSkillEnabledAsync(parameters),
@@ -200,6 +301,8 @@ internal sealed class AgentOsBridgeHost : IDisposable
             "get_knowledge_state" => GetKnowledgeState(parameters),
             "index_workspace_knowledge" => await IndexWorkspaceKnowledgeAsync(parameters),
             "search_workspace_knowledge" => SearchWorkspaceKnowledge(parameters),
+            "delete_knowledge_node" => await DeleteKnowledgeNodeAsync(parameters),
+            "review_knowledge_mapping" => await ReviewKnowledgeMappingAsync(parameters),
             "analyze_living_memory" => await _livingMemory.AnalyzeAsync(),
             "set_habit_state" => await SetHabitStateAsync(parameters),
             "distill_personal_skill" => await _livingMemory.DistillSkillAsync(),
@@ -217,6 +320,46 @@ internal sealed class AgentOsBridgeHost : IDisposable
                 RequiredString(parameters, "id")),
             _ => throw new InvalidOperationException($"Unknown bridge method: {method}")
         };
+    }
+
+    private object ResolveToolApproval(JsonObject parameters)
+    {
+        var approvalId = RequiredString(parameters, "approvalId");
+        var approved = parameters["approved"]?.GetValue<bool>() ?? false;
+        var rememberForTask = parameters["rememberForTask"]?.GetValue<bool>() ?? false;
+        if (!_pendingToolApprovals.TryGetValue(approvalId, out var pending))
+        {
+            return new { resolved = false, expired = true };
+        }
+        if (approved && rememberForTask)
+        {
+            _rememberedToolApprovals.TryAdd(
+                ToolApprovalKey(pending.TaskId, pending.ToolName),
+                0);
+        }
+        pending.Completion.TrySetResult(approved);
+        return new { resolved = true, approved, rememberForTask };
+    }
+
+    private static string ToolApprovalKey(string taskId, string toolName)
+        => $"{taskId}\n{toolName}";
+
+    private void ClearTaskApprovals(string taskId)
+    {
+        var keyPrefix = taskId + "\n";
+        foreach (var key in _rememberedToolApprovals.Keys
+                     .Where(value => value.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase)))
+        {
+            _rememberedToolApprovals.TryRemove(key, out _);
+        }
+        foreach (var pair in _pendingToolApprovals
+                     .Where(value => value.Value.TaskId.Equals(taskId, StringComparison.OrdinalIgnoreCase)))
+        {
+            if (_pendingToolApprovals.TryRemove(pair.Key, out var pending))
+            {
+                pending.Completion.TrySetResult(false);
+            }
+        }
     }
 
     private async Task<object> BootAsync()
@@ -404,8 +547,33 @@ internal sealed class AgentOsBridgeHost : IDisposable
         return new
         {
             task = ProjectSnapshot(snapshot),
-            messages
+            messages,
+            delivery = _deliveries.Get(taskId)
         };
+    }
+
+    private async Task<object> SubmitDeliveryFeedbackAsync(JsonObject parameters)
+        => await _deliveries.AddFeedbackAsync(
+            RequiredString(parameters, "taskId"),
+            OptionalString(parameters, "scope") ?? "delivery",
+            OptionalString(parameters, "category") ?? "quality",
+            RequiredString(parameters, "note"),
+            OptionalString(parameters, "artifactId"),
+            parameters["calibrateAgent"]?.GetValue<bool>() ?? false);
+
+    private async Task<object> AcceptDeliveryAsync(JsonObject parameters)
+        => await _deliveries.AcceptAsync(RequiredString(parameters, "taskId"));
+
+    private static async Task<object> ExtractDeliveryDocumentAsync(JsonObject parameters)
+    {
+        var path = Path.GetFullPath(RequiredString(parameters, "path"));
+        if (!File.Exists(path))
+            throw new InvalidOperationException("交付文件不存在。");
+        var extension = Path.GetExtension(path).ToLowerInvariant();
+        if (extension is not ".pdf" and not ".doc" and not ".docx" and not ".docm" and not ".dotx" and not ".dotm")
+            throw new InvalidOperationException("该文件不是支持提取的 PDF 或 Word 文档。");
+        var result = await DocumentAttachmentTextExtractor.ExtractAsync(path, CancellationToken.None);
+        return new { result.Text, result.Format, result.PageCount };
     }
 
     private async Task<object> ArchiveTaskAsync(JsonObject parameters)
@@ -573,7 +741,25 @@ internal sealed class AgentOsBridgeHost : IDisposable
                 task.Stage,
                 ActivityKind.Working,
                 task.Progress);
-            await _conversations.AppendAsync(task.Id, "user", prompt);
+            var userTurn = await _conversations.AppendAsync(task.Id, "user", prompt);
+            try
+            {
+                await _knowledgeGraph.IngestInputAsync(
+                    new KnowledgeInputRecord(
+                        userTurn.Id,
+                        task.Id,
+                        task.Title,
+                        task.WorkspaceRoot,
+                        userTurn.Content,
+                        userTurn.CreatedAt),
+                    _lifetime.Token);
+            }
+            catch (Exception exception) when (exception is IOException
+                                              or UnauthorizedAccessException
+                                              or InvalidOperationException)
+            {
+                // Knowledge capture is best effort and must never block the task itself.
+            }
             _active[task.Id] = task;
             return ProjectTask(task);
         }
@@ -696,12 +882,91 @@ internal sealed class AgentOsBridgeHost : IDisposable
                 task.AgentPackId,
                 task.Id,
                 task.WorkspaceRoot);
+        var resultPresentationContext = isEvolutionRun
+            ? string.Empty
+            : """
+              [NOVA RESULT PRESENTATION CONTRACT]
+              The final chat response is a handoff, not a debug report. Keep it concise and decision-first.
+              - Start with exactly one `[[NOVA_OUTCOME|结论|不超过 120 字的关键理由]]` line.
+              - List at most four user-facing primary deliverables with `[[NOVA_ARTIFACT|名称|工作区相对路径]]` lines.
+              - End with at most one `[[NOVA_NEXT|下一步动作]]` line.
+              - Do not expose tool-call counts, token usage, internal scoring dimensions, audit IDs, hashes,
+                orchestration traces, intermediate files or repeated verification facts unless the user explicitly asks.
+              - Do not emit `NOVA_METRIC` by default. A metric is allowed only when it directly changes the user's decision.
+              - Put detailed evidence, intermediate analysis and machine-readable proof in workspace files instead of the chat response.
+              - Clearly state any blocker that changes the conclusion; omit routine internal diagnostics.
+              """;
+        TaskCapsule? taskCapsule = null;
+        if (!isEvolutionRun)
+        {
+            try
+            {
+                var durableConversationCharacters = _conversations.Load(task.Id)
+                    .Sum(turn => turn.Content.Length);
+                var transientConversationCharacters = (parameters["conversation"] as JsonArray)?
+                    .OfType<JsonObject>()
+                    .Sum(value => (OptionalString(value, "content") ?? string.Empty).Length)
+                    ?? 0;
+                taskCapsule = await _taskCapsules.CompileAsync(
+                    task.Id,
+                    task.WorkspaceRoot,
+                    prompt,
+                    task.ExecutionMode,
+                    conversationContext,
+                    agentPackContext,
+                    calibrationContext,
+                    workingProfile,
+                    Math.Max(durableConversationCharacters, transientConversationCharacters),
+                    runCancellation.Token);
+                await _publish("context_event", new
+                {
+                    taskId = task.Id,
+                    kind = "capsule-compiled",
+                    taskCapsule.Schema,
+                    taskCapsule.ExecutionMode,
+                    taskCapsule.CharacterBudget,
+                    taskCapsule.UsedCharacters,
+                    taskCapsule.EstimatedPromptTokens,
+                    taskCapsule.EstimatedTokensAvoided,
+                    selectedFiles = taskCapsule.Selections.Count,
+                    taskCapsule.Fingerprint,
+                    cacheHit = taskCapsule.ContextCacheHit,
+                    sourceFingerprint = taskCapsule.ContextSourceFingerprint
+                });
+            }
+            catch (OperationCanceledException) when (runCancellation.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                await _publish("context_event", new
+                {
+                    taskId = task.Id,
+                    kind = "capsule-degraded",
+                    detail = $"Task Capsule 本轮降级为原上下文：{exception.Message}"
+                });
+            }
+        }
         var runtimePrompt = isEvolutionRun
             ? prompt
-            : string.Join(
-                Environment.NewLine + Environment.NewLine,
-                new[] { agentPackContext, calibrationContext, workingProfile, conversationContext, prompt }
-                    .Where(value => !string.IsNullOrWhiteSpace(value)));
+            : taskCapsule is not null
+                ? string.Join(
+                    Environment.NewLine + Environment.NewLine,
+                    taskCapsule.RuntimeContext,
+                    resultPresentationContext)
+                : string.Join(
+                    Environment.NewLine + Environment.NewLine,
+                    new[]
+                    {
+                        agentPackContext,
+                        calibrationContext,
+                        workingProfile,
+                        conversationContext,
+                        prompt,
+                        resultPresentationContext
+                    }
+                        .Where(value => !string.IsNullOrWhiteSpace(value)));
         IReadOnlySet<string>? allowedToolNames = isEvolutionRun
             ? new HashSet<string>(StringComparer.Ordinal)
             {
@@ -830,11 +1095,15 @@ internal sealed class AgentOsBridgeHost : IDisposable
                 var desktopApproved = approvalMode.Equals(
                     "workspaceDesktop",
                     StringComparison.OrdinalIgnoreCase);
+                var explicitlyReadOnly = approvalMode.Equals(
+                    "readOnly",
+                    StringComparison.OrdinalIgnoreCase);
                 var lowRiskWorkspaceAction = approval.ToolName is
                     "write_text_file"
                     or "replace_text_in_file"
                     or "run_workspace_command"
                     or "fetch_public_web_page"
+                    or "inspect_mcp_server_tools"
                     or "index_workspace_knowledge";
                 var boundedDesktopAction = approval.ToolName is
                     "activate_desktop_window"
@@ -842,32 +1111,113 @@ internal sealed class AgentOsBridgeHost : IDisposable
                     or "type_text_to_window"
                     or "send_window_key"
                     or "click_window_point";
-                var approvedDelegation = (task.ExecutionMode is
-                    AgentExecutionMode.Goal or AgentExecutionMode.Autopilot)
+                var approvedDelegation = workspaceApproved
+                    && task.ExecutionMode is not AgentExecutionMode.Ask
                     && approval.ToolName is
                         "delegate_parallel_tasks" or "auto_delegate_parallel_tasks";
                 var orchestrationDelegation = approvalMode.Equals(
                                                   "orchestration",
                                                   StringComparison.OrdinalIgnoreCase)
                                               && approvedDelegation;
-                var allowed = (workspaceApproved
+                var allowed = _rememberedToolApprovals.ContainsKey(
+                                  ToolApprovalKey(task.Id, approval.ToolName))
+                              || (workspaceApproved
                                && (lowRiskWorkspaceAction || approvedDelegation))
                               || (desktopApproved && boundedDesktopAction)
                               || orchestrationDelegation;
 
+                if (explicitlyReadOnly)
+                {
+                    await _publish("agent_event", new
+                    {
+                        taskId = task.Id,
+                        kind = "message",
+                        agent = "权限管家",
+                        action = "只读边界已生效",
+                        detail = $"{approval.Title} · 当前任务选择了仅分析，已跳过写入操作",
+                        progress = task.Progress,
+                        activeUnits = 1
+                    });
+                    return false;
+                }
+
+                if (allowed)
+                {
+                    await _publish("agent_event", new
+                    {
+                        taskId = task.Id,
+                        kind = "message",
+                        agent = "权限管家",
+                        action = "自动审核通过",
+                        detail = $"{approval.Title} · 仅在本任务与当前工作区内有效",
+                        progress = task.Progress,
+                        activeUnits = 1
+                    });
+                    return true;
+                }
+
+                var approvalId = $"approval-{Guid.NewGuid():N}";
+                var completion = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var pending = new PendingToolApproval(
+                    task.Id,
+                    approval.ToolName,
+                    completion);
+                _pendingToolApprovals[approvalId] = pending;
                 await _publish("agent_event", new
                 {
                     taskId = task.Id,
                     kind = "message",
                     agent = "权限管家",
-                    action = allowed ? "自动审核通过" : "需要单独确认",
-                    detail = allowed
-                        ? $"{approval.Title} · 仅在本轮和当前工作区内有效"
-                        : $"{approval.Title} · 未被本轮自动授权，操作已安全暂停",
+                    action = "等待你的确认",
+                    detail = approval.Title,
                     progress = task.Progress,
                     activeUnits = 1
                 });
-                return allowed;
+                await _publish("approval_request", new
+                {
+                    id = approvalId,
+                    taskId = task.Id,
+                    toolName = approval.ToolName,
+                    approval.Title,
+                    approval.Description,
+                    preview = approval.Description,
+                    scope = boundedDesktopAction
+                        ? "desktop"
+                        : approval.ToolName is "call_mcp_tool"
+                            or "schedule_agent_task"
+                            or "disable_scheduled_task"
+                            ? "external"
+                            : "workspace"
+                });
+                bool approved;
+                try
+                {
+                    approved = await completion.Task.WaitAsync(
+                        TimeSpan.FromMinutes(2),
+                        runCancellation.Token);
+                }
+                catch (TimeoutException)
+                {
+                    approved = false;
+                }
+                finally
+                {
+                    _pendingToolApprovals.TryRemove(approvalId, out _);
+                }
+                await _publish("agent_event", new
+                {
+                    taskId = task.Id,
+                    kind = "message",
+                    agent = "权限管家",
+                    action = approved ? "用户已授权" : "用户未授权",
+                    detail = approved
+                        ? $"{approval.Title} · 操作继续"
+                        : $"{approval.Title} · 已安全跳过，模型会尝试替代路径",
+                    progress = task.Progress,
+                    activeUnits = 1
+                });
+                return approved;
             },
             runCancellation.Token);
         await FlushPendingStreamAsync();
@@ -1035,6 +1385,63 @@ internal sealed class AgentOsBridgeHost : IDisposable
             cancelled = true;
         }
         return new { sessionId, cancelled };
+    }
+
+    private object GetTaskCapsule(JsonObject parameters)
+    {
+        var taskId = RequiredString(parameters, "taskId");
+        var capsule = _taskCapsules.Load(taskId);
+        if (capsule is not null) return capsule;
+        return new
+        {
+            schema = "nova.task-capsule/1.0",
+            taskId,
+            status = "not-compiled",
+            detail = "该任务尚未进入模型执行阶段，因此还没有 Task Capsule。"
+        };
+    }
+
+    private object GetContextBudget(JsonObject parameters)
+    {
+        var mode = Enum.TryParse<AgentExecutionMode>(
+            OptionalString(parameters, "mode") ?? "Build",
+            ignoreCase: true,
+            out var parsedMode)
+            ? parsedMode
+            : AgentExecutionMode.Build;
+        var characters = Math.Clamp(parameters["characters"]?.GetValue<int>() ?? 0, 0, 20_000_000);
+        var policy = TaskCapsuleService.GetBudgetPolicy(mode, characters);
+        var taskId = OptionalString(parameters, "taskId");
+        return new
+        {
+            schema = "nova.context-budget/1.0",
+            policy,
+            taskId,
+            capsule = taskId is null ? null : _taskCapsules.Load(taskId)
+        };
+    }
+
+    private async Task<object> CompileTaskCapsuleAsync(JsonObject parameters)
+    {
+        var task = GetActiveTask(RequiredString(parameters, "taskId"));
+        var prompt = OptionalString(parameters, "prompt") ?? task.Description;
+        var conversation = BuildConversationContext(
+            task.Id,
+            parameters["conversation"] as JsonArray,
+            prompt);
+        var durableCharacters = _conversations.Load(task.Id).Sum(turn => turn.Content.Length);
+        var capsule = await _taskCapsules.CompileAsync(
+            task.Id,
+            task.WorkspaceRoot,
+            prompt,
+            task.ExecutionMode,
+            conversation,
+            _agentPacks.BuildRuntimeContext(task.AgentPackId),
+            _agentCalibrations.BuildRuntimeContext(task.AgentPackId, task.Id, task.WorkspaceRoot),
+            _livingMemory.BuildProfilePrompt(),
+            durableCharacters,
+            _lifetime.Token);
+        return capsule;
     }
 
     private string BuildConversationContext(
@@ -1327,6 +1734,10 @@ internal sealed class AgentOsBridgeHost : IDisposable
             {
                 await _conversations.AppendAsync(task.Id, "assistant", task.Draft);
             }
+            if (parameters["delivery"] is JsonObject delivery)
+            {
+                await _deliveries.SaveAsync(task.Id, delivery);
+            }
             await _supervisor.ReleaseAsync(task, executionSequence: committed.Sequence);
             leaseReleased = true;
             return ProjectTask(task);
@@ -1369,6 +1780,7 @@ internal sealed class AgentOsBridgeHost : IDisposable
             }
             _active.TryRemove(task.Id, out _);
             _governor.EndTask(task.Id);
+            ClearTaskApprovals(task.Id);
         }
     }
 
@@ -1381,6 +1793,7 @@ internal sealed class AgentOsBridgeHost : IDisposable
             cancellation.Cancel();
             cancelled = true;
         }
+        ClearTaskApprovals(taskId);
         return Task.FromResult<object>(new { taskId, cancelled });
     }
 
@@ -1964,7 +2377,9 @@ internal sealed class AgentOsBridgeHost : IDisposable
         var workspaceRoot = OptionalString(parameters, "workspaceRoot");
         var snapshot = _knowledgeIndex.GetSnapshot();
         var documents = _knowledgeIndex.GetDocuments(workspaceRoot);
-        var graph = _knowledgeGraph.GetSnapshot();
+        var completeGraph = _knowledgeGraph.GetSnapshot();
+        var graph = _knowledgeGraph.CreateView(workspaceRoot, maximumNodes: 160);
+        var knowledgeOs = _knowledgeOperatingSystem.Compile(graph, workspaceRoot);
         return new
         {
             workspaceRoot,
@@ -1974,15 +2389,29 @@ internal sealed class AgentOsBridgeHost : IDisposable
             chunks = documents.Sum(document => document.ChunkCount),
             bytes = documents.Sum(document => document.SizeBytes),
             documents = documents.Take(200).ToArray(),
+            knowledgeOs,
             graph = new
             {
                 graphPath = _knowledgeGraph.GraphPath,
                 graph.UpdatedAt,
                 nodeCount = graph.Nodes.Count,
                 edgeCount = graph.Edges.Count,
+                totalNodeCount = completeGraph.Nodes.Count,
+                totalEdgeCount = completeGraph.Edges.Count,
+                inputCount = graph.Nodes.Count(node => node.Kind == "Input"),
+                inferredEdgeCount = graph.Edges.Count(edge => edge.IsInferred),
                 nodes = graph.Nodes
                     .OrderByDescending(node => node.Weight)
-                    .Take(24)
+                    .Take(160)
+                    .ToArray(),
+                edges = graph.Edges.Take(600).ToArray(),
+                spaces = completeGraph.Nodes
+                    .Where(node => node.Id.StartsWith("workspace-", StringComparison.OrdinalIgnoreCase))
+                    .GroupBy(node => node.Id, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => group.First())
+                    .OrderByDescending(node => node.UpdatedAt)
+                    .Select(node => new { id = node.Id, label = node.Label })
+                    .Take(40)
                     .ToArray()
             }
         };
@@ -2000,7 +2429,7 @@ internal sealed class AgentOsBridgeHost : IDisposable
             _mcpRegistry.GetServers(),
             _schedules.GetSchedules(),
             _lifetime.Token,
-            _knowledgeIndex.GetDocuments(workspaceRoot));
+            _knowledgeIndex.GetDocuments());
         return new
         {
             summary,
@@ -2024,6 +2453,26 @@ internal sealed class AgentOsBridgeHost : IDisposable
             workspaceRoot,
             results = _knowledgeIndex.Search(query, workspaceRoot, maximumResults)
         };
+    }
+
+    private async Task<object> DeleteKnowledgeNodeAsync(JsonObject parameters)
+    {
+        var nodeId = RequiredString(parameters, "nodeId");
+        var deleted = await _knowledgeGraph.DeleteNodeAsync(nodeId, _lifetime.Token);
+        return new { deleted, nodeId };
+    }
+
+    private async Task<object> ReviewKnowledgeMappingAsync(JsonObject parameters)
+    {
+        var sourceId = RequiredString(parameters, "sourceId");
+        var targetId = RequiredString(parameters, "targetId");
+        var accepted = parameters["accepted"]?.GetValue<bool>() ?? false;
+        var edge = await _knowledgeGraph.ReviewMappingAsync(
+            sourceId,
+            targetId,
+            accepted,
+            _lifetime.Token);
+        return new { reviewed = true, accepted, edge };
     }
 
     private TaskItem GetActiveTask(string taskId)

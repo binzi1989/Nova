@@ -1,23 +1,34 @@
 const {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   screen,
-  session
+  session,
+  shell
 } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const http = require("node:http");
 const readline = require("node:readline");
 
 const isDev = !app.isPackaged;
 const isWorkshopRecoverySmoke =
   process.argv.includes("--smoke-workshop-recovery")
   || app.commandLine.hasSwitch("smoke-workshop-recovery");
+const isGatewaySmoke =
+  process.argv.includes("--smoke-gateway")
+  || app.commandLine.hasSwitch("smoke-gateway");
+const isKnowledgeWindowSmoke =
+  process.argv.includes("--smoke-knowledge-window")
+  || app.commandLine.hasSwitch("smoke-knowledge-window");
 const isSmoke =
   isWorkshopRecoverySmoke
+  || isGatewaySmoke
+  || isKnowledgeWindowSmoke
   || process.argv.includes("--smoke")
   || app.commandLine.hasSwitch("smoke");
 if (isSmoke) app.disableHardwareAcceleration();
@@ -29,10 +40,28 @@ const activeRuns = new Map();
 const activeAgentPackBuilds = new Map();
 const activeWorkshopRuns = new Map();
 let mainWindow;
+let knowledgeWindow;
 let bridge;
 let manualZoomFactor = null;
 let adaptiveZoomTimer = null;
 const ownsInstance = isSmoke || app.requestSingleInstanceLock();
+const extensionGateway = {
+  server: null,
+  port: 0,
+  token: "",
+  startedAt: null,
+  clients: new Set(),
+  events: [],
+  sequence: 0,
+  keepAlive: null
+};
+const extensionGatewayHooks = [
+  "task.started",
+  "context.compiled",
+  "artifact.created",
+  "delivery.ready",
+  "action.requested"
+];
 
 if (!ownsInstance) {
   app.quit();
@@ -292,11 +321,167 @@ function extensionProfilePath() {
   return path.join(app.getPath("userData"), "extension-profiles.json");
 }
 
+function gatewayActionRequestPath() {
+  return path.join(app.getPath("userData"), "extension-gateway", "action-requests.json");
+}
+
+function gatewaySessionDescriptorPath() {
+  return path.join(app.getPath("userData"), "extension-gateway", "session.json");
+}
+
+async function writeGatewaySessionDescriptor() {
+  const target = gatewaySessionDescriptorPath();
+  await fs.promises.mkdir(path.dirname(target), { recursive: true });
+  await fs.promises.writeFile(target, JSON.stringify({
+    schema: "nova.gateway-session/1.0",
+    product: "NOVA AgentOS",
+    pid: process.pid,
+    baseUrl: `http://127.0.0.1:${extensionGateway.port}`,
+    apiVersion: "v1",
+    startedAt: extensionGateway.startedAt
+  }, null, 2), { encoding: "utf8", mode: 0o600 });
+}
+
+async function removeGatewaySessionDescriptor() {
+  const target = gatewaySessionDescriptorPath();
+  try {
+    const current = JSON.parse(await fs.promises.readFile(target, "utf8"));
+    if (Number(current?.pid) !== process.pid) return;
+    await fs.promises.unlink(target);
+  } catch (error) {
+    if (error?.code !== "ENOENT") console.error(`[Extension Gateway] ${safeError(error)}`);
+  }
+}
+
+function readGatewayActionRequests() {
+  try {
+    const value = JSON.parse(fs.readFileSync(gatewayActionRequestPath(), "utf8"));
+    return Array.isArray(value?.requests) ? value.requests.slice(0, 100) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeGatewayActionRequests(requests) {
+  const target = gatewayActionRequestPath();
+  const temporary = `${target}.tmp`;
+  await fs.promises.mkdir(path.dirname(target), { recursive: true });
+  await fs.promises.writeFile(
+    temporary,
+    JSON.stringify({ version: 1, requests: requests.slice(0, 100) }, null, 2),
+    "utf8"
+  );
+  await fs.promises.rename(temporary, target);
+}
+
+function normalizeGatewayActionRequest(value, request) {
+  const prompt = String(value?.prompt || value?.goal || "").trim();
+  if (!prompt || prompt.length > 8000) {
+    throw new Error("任务目标必须为 1 到 8000 个字符。");
+  }
+  const title = String(value?.title || prompt.split(/\r?\n/, 1)[0] || "外部任务请求")
+    .trim()
+    .slice(0, 120);
+  const allowedModes = new Set(["Ask", "Plan", "Build", "Goal"]);
+  const executionMode = allowedModes.has(value?.executionMode) ? value.executionMode : "Plan";
+  const agentPackId = String(value?.agentPackId || "").trim();
+  if (agentPackId && !/^[A-Za-z0-9._:-]{1,160}$/.test(agentPackId)) {
+    throw new Error("Agent Pack ID 格式无效。");
+  }
+  return {
+    id: `request-${crypto.randomUUID().replaceAll("-", "")}`,
+    title: title || "外部任务请求",
+    prompt,
+    executionMode,
+    agentPackId: agentPackId || null,
+    source: String(value?.source || "本机扩展").trim().slice(0, 80) || "本机扩展",
+    origin: String(request.headers.origin || "local-process").slice(0, 200),
+    status: "pending",
+    createdAt: new Date().toISOString(),
+    resolvedAt: null
+  };
+}
+
+function readGatewayJsonBody(request, maximumBytes = 65536) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    let bytes = 0;
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > maximumBytes) {
+        reject(new Error("请求体超过 64 KB 上限。"));
+        request.destroy();
+        return;
+      }
+      body += chunk;
+    });
+    request.on("end", () => {
+      try {
+        resolve(body ? JSON.parse(body) : {});
+      } catch {
+        reject(new Error("请求体不是有效 JSON。"));
+      }
+    });
+    request.once("error", reject);
+  });
+}
+
+async function createGatewayActionRequest(value, request) {
+  const current = readGatewayActionRequests();
+  const pending = current.filter((item) => item.status === "pending");
+  if (pending.length >= 20) throw new Error("待审阅任务请求已达到 20 条上限。");
+  const actionRequest = normalizeGatewayActionRequest(value, request);
+  await writeGatewayActionRequests([actionRequest, ...current]);
+  publishGatewayHook("action.requested", {
+    requestId: actionRequest.id,
+    title: actionRequest.title,
+    source: actionRequest.source,
+    executionMode: actionRequest.executionMode,
+    agentPackId: actionRequest.agentPackId
+  });
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("nova:gateway-action-request", actionRequest);
+  }
+  return actionRequest;
+}
+
+async function resolveGatewayActionRequest(id, status) {
+  if (!/^[A-Za-z0-9-]{1,160}$/.test(String(id || ""))) {
+    throw new Error("任务请求 ID 无效。");
+  }
+  if (!["accepted", "rejected"].includes(status)) {
+    throw new Error("任务请求处理状态无效。");
+  }
+  const requests = readGatewayActionRequests();
+  const index = requests.findIndex((item) => item.id === id);
+  if (index < 0) throw new Error("任务请求不存在或已被清理。");
+  const resolved = {
+    ...requests[index],
+    status,
+    resolvedAt: new Date().toISOString()
+  };
+  requests[index] = resolved;
+  await writeGatewayActionRequests(requests);
+  publishGatewayHook(`action.${status}`, {
+    requestId: resolved.id,
+    title: resolved.title,
+    source: resolved.source
+  });
+  return resolved;
+}
+
 function readExtensionProfiles() {
   try {
-    return JSON.parse(fs.readFileSync(extensionProfilePath(), "utf8"));
+    const value = JSON.parse(fs.readFileSync(extensionProfilePath(), "utf8"));
+    return {
+      ...value,
+      ssh: Array.isArray(value?.ssh) ? value.ssh : [],
+      cloud: Array.isArray(value?.cloud) ? value.cloud : [],
+      gateway: { enabled: value?.gateway?.enabled === true }
+    };
   } catch {
-    return { ssh: [], cloud: [] };
+    return { ssh: [], cloud: [], gateway: { enabled: false } };
   }
 }
 
@@ -306,6 +491,444 @@ async function writeExtensionProfiles(value) {
   await fs.promises.mkdir(path.dirname(target), { recursive: true });
   await fs.promises.writeFile(temporary, JSON.stringify(value, null, 2), "utf8");
   await fs.promises.rename(temporary, target);
+}
+
+function gatewayStatus(includeToken = false) {
+  const running = Boolean(extensionGateway.server?.listening);
+  const baseUrl = running ? `http://127.0.0.1:${extensionGateway.port}` : "";
+  return {
+    enabled: readExtensionProfiles().gateway.enabled,
+    running,
+    host: "127.0.0.1",
+    port: extensionGateway.port,
+    baseUrl,
+    eventsUrl: running ? `${baseUrl}/v1/events` : "",
+    startedAt: extensionGateway.startedAt,
+    hooks: extensionGatewayHooks,
+    permissions: ["tasks.read", "artifacts.read", "events.read", "actions.request"],
+    pendingActionRequests: readGatewayActionRequests().filter((item) => item.status === "pending").length,
+    localOnly: true,
+    token: includeToken ? extensionGateway.token : undefined
+  };
+}
+
+function gatewayOriginAllowed(origin) {
+  if (!origin) return true;
+  try {
+    const parsed = new URL(origin);
+    return ["http:", "https:"].includes(parsed.protocol)
+      && ["127.0.0.1", "localhost", "[::1]"].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function gatewayWriteJson(response, statusCode, value, origin = "") {
+  const headers = {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer"
+  };
+  if (origin && gatewayOriginAllowed(origin)) {
+    headers["Access-Control-Allow-Origin"] = origin;
+    headers.Vary = "Origin";
+  }
+  response.writeHead(statusCode, headers);
+  response.end(JSON.stringify(value));
+}
+
+function gatewayAuthorized(request, parsedUrl) {
+  const authorization = String(request.headers.authorization || "");
+  const bearer = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+  const headerToken = String(request.headers["x-nova-token"] || "").trim();
+  const queryToken = parsedUrl.searchParams.get("access_token") || "";
+  const candidate = bearer || headerToken || queryToken;
+  if (!candidate || !extensionGateway.token) return false;
+  const expected = Buffer.from(extensionGateway.token);
+  const actual = Buffer.from(candidate);
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+function sanitizeGatewayArtifact(artifact) {
+  return {
+    id: String(artifact?.id || ""),
+    title: String(artifact?.title || artifact?.relativePath || "交付物"),
+    relativePath: String(artifact?.relativePath || ""),
+    kind: String(artifact?.kind || "file"),
+    mediaType: String(artifact?.mediaType || "application/octet-stream"),
+    size: Number(artifact?.size || 0),
+    modifiedAt: artifact?.modifiedAt || null,
+    role: String(artifact?.role || "supporting"),
+    previewable: Boolean(artifact?.previewable)
+  };
+}
+
+function sanitizeGatewayTask(task, includeDelivery = false) {
+  const source = task?.task || task || {};
+  const delivery = task?.delivery || source.delivery || null;
+  const result = {
+    id: String(source.id || source.taskId || ""),
+    title: String(source.title || "NOVA 任务"),
+    state: String(source.state || source.status || "unknown"),
+    status: String(source.status || source.state || "unknown"),
+    progress: Number(source.progress || 0),
+    provider: String(source.provider || ""),
+    model: String(source.model || ""),
+    agentPackId: source.agentPackId || null,
+    executionMode: String(source.executionMode || source.mode || ""),
+    createdAt: source.createdAt || null,
+    updatedAt: source.updatedAt || null,
+    hasResult: Boolean(source.hasResult || delivery)
+  };
+  if (includeDelivery && delivery) {
+    result.delivery = {
+      deliveryId: String(delivery.deliveryId || ""),
+      revision: Number(delivery.revision || 1),
+      status: String(delivery.status || "READY"),
+      title: String(delivery.title || result.title),
+      outcome: String(delivery.outcome || delivery.summary || ""),
+      reviewState: String(delivery.reviewState || "unreviewed"),
+      artifacts: Array.isArray(delivery.artifacts)
+        ? delivery.artifacts.map(sanitizeGatewayArtifact)
+        : [],
+      evidence: Array.isArray(delivery.evidence) ? delivery.evidence.map(String) : [],
+      incomplete: Array.isArray(delivery.incomplete) ? delivery.incomplete.map(String) : [],
+      nextActions: Array.isArray(delivery.nextActions) ? delivery.nextActions.map(String) : []
+    };
+  }
+  return result;
+}
+
+function sanitizeGatewayTaskCapsule(capsule) {
+  if (!capsule || capsule.status === "not-compiled") return capsule;
+  return {
+    schema: String(capsule.schema || "nova.task-capsule/1.0"),
+    taskId: String(capsule.taskId || ""),
+    goal: String(capsule.goal || ""),
+    executionMode: String(capsule.executionMode || ""),
+    characterBudget: Number(capsule.characterBudget || 0),
+    usedCharacters: Number(capsule.usedCharacters || 0),
+    estimatedPromptTokens: Number(capsule.estimatedPromptTokens || 0),
+    estimatedRawCharacters: Number(capsule.estimatedRawCharacters || 0),
+    estimatedCharactersAvoided: Number(capsule.estimatedCharactersAvoided || 0),
+    estimatedTokensAvoided: Number(capsule.estimatedTokensAvoided || 0),
+    fingerprint: String(capsule.fingerprint || ""),
+    contextCacheHit: capsule.contextCacheHit === true,
+    contextSourceFingerprint: String(capsule.contextSourceFingerprint || ""),
+    layers: Array.isArray(capsule.layers) ? capsule.layers : [],
+    selections: Array.isArray(capsule.selections)
+      ? capsule.selections.map((item) => ({
+        relativePath: String(item.relativePath || ""),
+        score: Number(item.score || 0),
+        reasons: Array.isArray(item.reasons) ? item.reasons.map(String) : [],
+        startLine: Number(item.startLine || 0),
+        endLine: Number(item.endLine || 0),
+        includedCharacters: Number(item.includedCharacters || 0)
+      }))
+      : [],
+    exclusions: Array.isArray(capsule.exclusions) ? capsule.exclusions.map(String) : [],
+    compiledAt: capsule.compiledAt || null
+  };
+}
+
+function publishGatewayHook(type, payload = {}) {
+  if (!extensionGateway.server?.listening) return null;
+  const event = {
+    schema: "nova.hook/1.0",
+    id: `hook-${Date.now().toString(36)}-${++extensionGateway.sequence}`,
+    sequence: extensionGateway.sequence,
+    type,
+    occurredAt: new Date().toISOString(),
+    taskId: String(payload.taskId || ""),
+    payload
+  };
+  extensionGateway.events.push(event);
+  if (extensionGateway.events.length > 200) extensionGateway.events.shift();
+  const frame = `event: ${type}\nid: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`;
+  for (const client of [...extensionGateway.clients]) {
+    try {
+      client.write(frame);
+    } catch {
+      extensionGateway.clients.delete(client);
+    }
+  }
+  return event;
+}
+
+async function handleGatewayRequest(request, response) {
+  const origin = String(request.headers.origin || "");
+  if (!gatewayOriginAllowed(origin)) {
+    gatewayWriteJson(response, 403, { error: "origin_not_allowed" });
+    return;
+  }
+  const parsedUrl = new URL(request.url || "/", "http://127.0.0.1");
+  if (request.method === "OPTIONS") {
+    response.writeHead(204, {
+      "Access-Control-Allow-Origin": origin,
+      "Access-Control-Allow-Headers": "Authorization, X-Nova-Token, Content-Type",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Max-Age": "600",
+      Vary: "Origin"
+    });
+    response.end();
+    return;
+  }
+  if (!gatewayAuthorized(request, parsedUrl)) {
+    gatewayWriteJson(response, 401, { error: "invalid_access_token" }, origin);
+    return;
+  }
+
+  try {
+    if (request.method === "POST" && parsedUrl.pathname === "/v1/action-requests") {
+      const body = await readGatewayJsonBody(request);
+      const actionRequest = await createGatewayActionRequest(body, request);
+      gatewayWriteJson(response, 202, { request: actionRequest }, origin);
+      return;
+    }
+    if (request.method !== "GET") {
+      gatewayWriteJson(response, 405, { error: "write_api_not_enabled" }, origin);
+      return;
+    }
+    if (parsedUrl.pathname === "/" || parsedUrl.pathname === "/v1/health") {
+      gatewayWriteJson(response, 200, {
+        product: "NOVA AgentOS Extension Gateway",
+        version: "1.0",
+        status: "ready",
+        ...gatewayStatus(false)
+      }, origin);
+      return;
+    }
+    if (parsedUrl.pathname === "/v1/manifest") {
+      gatewayWriteJson(response, 200, {
+        schema: "nova.extension-gateway/1.0",
+        transport: ["http", "sse"],
+        permissions: gatewayStatus(false).permissions,
+        hooks: extensionGatewayHooks,
+        routes: [
+          "GET /v1/health",
+          "GET /v1/tasks",
+          "GET /v1/tasks/{taskId}",
+          "GET /v1/tasks/{taskId}/artifacts",
+          "GET /v1/tasks/{taskId}/context",
+          "GET /v1/budget",
+          "GET /v1/events",
+          "GET /v1/action-requests",
+          "POST /v1/action-requests"
+        ]
+      }, origin);
+      return;
+    }
+    if (parsedUrl.pathname === "/v1/tasks") {
+      const result = await bridge.call("list_tasks");
+      const tasks = Array.isArray(result) ? result : Array.isArray(result?.tasks) ? result.tasks : [];
+      gatewayWriteJson(response, 200, { tasks: tasks.map((task) => sanitizeGatewayTask(task)) }, origin);
+      return;
+    }
+    if (parsedUrl.pathname === "/v1/action-requests") {
+      gatewayWriteJson(response, 200, {
+        requests: readGatewayActionRequests().filter((item) => item.status === "pending")
+      }, origin);
+      return;
+    }
+    if (parsedUrl.pathname === "/v1/budget") {
+      const mode = parsedUrl.searchParams.get("mode") || "Build";
+      const taskId = parsedUrl.searchParams.get("taskId") || "";
+      const characters = Number(parsedUrl.searchParams.get("characters") || 0);
+      if (!/^(Ask|Plan|Build|Autopilot|Goal)$/i.test(mode)
+          || !Number.isInteger(characters)
+          || characters < 0
+          || characters > 20000000
+          || (taskId && !/^[A-Za-z0-9._:-]{1,160}$/.test(taskId))) {
+        gatewayWriteJson(response, 400, { error: "invalid_budget_query" }, origin);
+        return;
+      }
+      const budget = await bridge.call("get_context_budget", { mode, characters, taskId: taskId || null });
+      if (budget?.capsule) budget.capsule = sanitizeGatewayTaskCapsule(budget.capsule);
+      gatewayWriteJson(response, 200, budget, origin);
+      return;
+    }
+    const taskMatch = parsedUrl.pathname.match(/^\/v1\/tasks\/([^/]+)$/);
+    const artifactMatch = parsedUrl.pathname.match(/^\/v1\/tasks\/([^/]+)\/artifacts$/);
+    const contextMatch = parsedUrl.pathname.match(/^\/v1\/tasks\/([^/]+)\/context$/);
+    if (taskMatch || artifactMatch || contextMatch) {
+      const taskId = decodeURIComponent((artifactMatch || contextMatch || taskMatch)[1]);
+      if (!/^[A-Za-z0-9._:-]{1,160}$/.test(taskId)) {
+        gatewayWriteJson(response, 400, { error: "invalid_task_id" }, origin);
+        return;
+      }
+      if (contextMatch) {
+        const capsule = await bridge.call("get_task_capsule", { taskId });
+        gatewayWriteJson(response, 200, sanitizeGatewayTaskCapsule(capsule), origin);
+        return;
+      }
+      const task = await bridge.call("get_task", { taskId });
+      if (artifactMatch) {
+        const delivery = task?.delivery || task?.task?.delivery || null;
+        const artifacts = Array.isArray(delivery?.artifacts)
+          ? delivery.artifacts.map(sanitizeGatewayArtifact)
+          : [];
+        gatewayWriteJson(response, 200, { taskId, artifacts }, origin);
+      } else {
+        gatewayWriteJson(response, 200, sanitizeGatewayTask(task, true), origin);
+      }
+      return;
+    }
+    if (parsedUrl.pathname === "/v1/events") {
+      const headers = {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no"
+      };
+      if (origin) {
+        headers["Access-Control-Allow-Origin"] = origin;
+        headers.Vary = "Origin";
+      }
+      response.writeHead(200, headers);
+      response.write(": NOVA Extension Gateway\n\n");
+      extensionGateway.clients.add(response);
+      const lastEventId = String(request.headers["last-event-id"] || "");
+      const replay = lastEventId
+        ? extensionGateway.events.slice(Math.max(0, extensionGateway.events.findIndex((item) => item.id === lastEventId) + 1))
+        : extensionGateway.events.slice(-20);
+      for (const event of replay) {
+        response.write(`event: ${event.type}\nid: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
+      }
+      request.on("close", () => extensionGateway.clients.delete(response));
+      return;
+    }
+    gatewayWriteJson(response, 404, { error: "route_not_found" }, origin);
+  } catch (error) {
+    gatewayWriteJson(response, 502, { error: "agentos_bridge_error", message: safeError(error) }, origin);
+  }
+}
+
+async function startExtensionGateway(force = false) {
+  if (extensionGateway.server?.listening || (!force && !readExtensionProfiles().gateway.enabled)) {
+    return gatewayStatus(true);
+  }
+  extensionGateway.token = crypto.randomBytes(32).toString("base64url");
+  const server = http.createServer((request, response) => {
+    void handleGatewayRequest(request, response);
+  });
+  extensionGateway.server = server;
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  extensionGateway.port = Number(server.address()?.port || 0);
+  extensionGateway.startedAt = new Date().toISOString();
+  await writeGatewaySessionDescriptor();
+  extensionGateway.keepAlive = setInterval(() => {
+    for (const client of [...extensionGateway.clients]) {
+      try {
+        client.write(`: keepalive ${Date.now()}\n\n`);
+      } catch {
+        extensionGateway.clients.delete(client);
+      }
+    }
+  }, 15000);
+  extensionGateway.keepAlive.unref?.();
+  return gatewayStatus(true);
+}
+
+function requestGatewayForSmoke(pathname, method = "GET", payload = null) {
+  return new Promise((resolve, reject) => {
+    const body = payload ? JSON.stringify(payload) : "";
+    const request = http.request({
+      host: "127.0.0.1",
+      port: extensionGateway.port,
+      path: pathname,
+      method,
+      headers: {
+        Authorization: `Bearer ${extensionGateway.token}`,
+        ...(body ? {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body)
+        } : {})
+      }
+    }, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        body = `${body}${chunk}`.slice(0, 1000000);
+      });
+      response.on("end", () => resolve({ status: response.statusCode, body }));
+    });
+    request.setTimeout(5000, () => request.destroy(new Error("Gateway smoke timeout.")));
+    request.once("error", reject);
+    if (body) request.write(body);
+    request.end();
+  });
+}
+
+async function smokeExtensionGateway(includeBridge = true) {
+  if (!extensionGateway.server?.listening) throw new Error("Extension Gateway did not start.");
+  const sessionDescriptor = JSON.parse(await fs.promises.readFile(gatewaySessionDescriptorPath(), "utf8"));
+  const health = await requestGatewayForSmoke("/v1/health");
+  const manifest = await requestGatewayForSmoke("/v1/manifest");
+  const deniedWrite = await requestGatewayForSmoke("/v1/tasks", "POST");
+  const unauthorized = await new Promise((resolve, reject) => {
+    const request = http.request({
+      host: "127.0.0.1",
+      port: extensionGateway.port,
+      path: "/v1/tasks",
+      method: "GET"
+    }, (response) => {
+      response.resume();
+      response.on("end", () => resolve(response.statusCode));
+    });
+    request.once("error", reject);
+    request.end();
+  });
+  let tasks = { status: 200, body: "" };
+  if (includeBridge) tasks = await requestGatewayForSmoke("/v1/tasks");
+  let actionRequest = { status: 202, body: "{}" };
+  let actionRequests = { status: 200, body: "{\"requests\":[]}" };
+  if (!includeBridge) {
+    actionRequest = await requestGatewayForSmoke("/v1/action-requests", "POST", {
+      source: "Gateway Smoke",
+      title: "验证外部任务请求",
+      prompt: "生成一份只读接入检查清单",
+      executionMode: "Plan"
+    });
+    actionRequests = await requestGatewayForSmoke("/v1/action-requests");
+    const created = JSON.parse(actionRequest.body)?.request;
+    if (created?.id) await resolveGatewayActionRequest(created.id, "accepted");
+  }
+  if (health.status !== 200
+      || manifest.status !== 200
+      || !manifest.body.includes("GET /v1/tasks/{taskId}/context")
+      || !manifest.body.includes("GET /v1/budget")
+      || !manifest.body.includes("context.compiled")
+      || tasks.status !== 200
+      || actionRequest.status !== 202
+      || actionRequests.status !== 200
+      || (!includeBridge && !actionRequests.body.includes("验证外部任务请求"))
+      || deniedWrite.status !== 405
+      || unauthorized !== 401
+      || sessionDescriptor.baseUrl !== `http://127.0.0.1:${extensionGateway.port}`
+      || Object.prototype.hasOwnProperty.call(sessionDescriptor, "token")
+      || /workspaceRoot|[A-Za-z]:\\\\/.test(tasks.body)) {
+    throw new Error("Extension Gateway security contract failed.");
+  }
+}
+
+async function stopExtensionGateway() {
+  if (extensionGateway.keepAlive) clearInterval(extensionGateway.keepAlive);
+  extensionGateway.keepAlive = null;
+  for (const client of extensionGateway.clients) client.end();
+  extensionGateway.clients.clear();
+  const server = extensionGateway.server;
+  extensionGateway.server = null;
+  extensionGateway.port = 0;
+  extensionGateway.startedAt = null;
+  extensionGateway.token = "";
+  await removeGatewaySessionDescriptor();
+  if (server) {
+    await new Promise((resolve) => server.close(() => resolve()));
+  }
 }
 
 function normalizeSshProfile(value) {
@@ -385,6 +1008,17 @@ function testSsh(profile) {
 function senderWindow(event) {
   const window = BrowserWindow.fromWebContents(event.sender);
   if (!window || window !== mainWindow) throw new Error("无效窗口调用。");
+  return window;
+}
+
+function knowledgeSenderWindow(event) {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const isMain = window && window === mainWindow;
+  const isKnowledge = window
+    && knowledgeWindow
+    && !knowledgeWindow.isDestroyed()
+    && window === knowledgeWindow;
+  if (!isMain && !isKnowledge) throw new Error("无效知识窗口调用。");
   return window;
 }
 
@@ -1217,6 +1851,63 @@ async function callWorkshopModel(connection, systemPrompt, userPrompt, options =
   }
 }
 
+function normalizeAgentFoundryBrief(value) {
+  const text = (input, limit = 600) => String(input || "").trim().slice(0, limit);
+  const choose = (input, allowed, fallback) => allowed.includes(String(input || ""))
+    ? String(input)
+    : fallback;
+  const brief = {
+    name: text(value?.name, 80),
+    category: text(value?.category, 60),
+    description: text(value?.description, 520),
+    objective: text(value?.objective, 420),
+    scenarioProfile: choose(value?.scenarioProfile, ["research", "operations", "content", "engineering", "compliance", "service"], "research"),
+    autonomyLevel: choose(value?.autonomyLevel, ["assist", "approval-execute", "goal-autonomous"], "approval-execute"),
+    lifecycle: choose(value?.lifecycle, ["single-run", "project", "continuous", "scheduled"], "project"),
+    collaborationMode: choose(value?.collaborationMode, ["independent", "specialist-team", "coordinator"], "specialist-team"),
+    deliveryMode: choose(value?.deliveryMode, ["conversation", "document", "data", "code", "operation", "mixed"], "mixed"),
+    decisionStyle: choose(value?.decisionStyle, ["conservative", "balanced", "exploratory", "creative", "compliance-first"], "balanced"),
+    primaryArtifact: text(value?.primaryArtifact, 100),
+    understanding: text(value?.understanding, 360)
+  };
+  const missing = ["name", "category", "description", "objective", "primaryArtifact", "understanding"]
+    .filter((key) => !brief[key]);
+  if (missing.length) {
+    throw new Error(`模型返回的业务 Agent 摘要不完整：缺少 ${missing.join("、")}`);
+  }
+  return brief;
+}
+
+async function prepareAgentFoundryBrief(request) {
+  const provider = String(request?.provider || "");
+  validateProvider(provider);
+  const connection = modelConnections.get(provider);
+  if (!connection) throw new Error(`请先连接 ${provider.toUpperCase()} 模型，再让 NOVA 理解业务需求。`);
+  const goal = String(request?.goal || "").trim();
+  if (goal.length < 8) throw new Error("请用一句完整的话说明这个 Agent 要帮助谁、解决什么问题。");
+  const schema = `{"name":"简洁中文名称","category":"行业或业务分类","description":"服务对象、典型任务与明确边界","objective":"可检查的最终结果","scenarioProfile":"research|operations|content|engineering|compliance|service","autonomyLevel":"assist|approval-execute|goal-autonomous","lifecycle":"single-run|project|continuous|scheduled","collaborationMode":"independent|specialist-team|coordinator","deliveryMode":"conversation|document|data|code|operation|mixed","decisionStyle":"conservative|balanced|exploratory|creative|compliance-first","primaryArtifact":"中文文件名.扩展名","understanding":"用普通人能懂的一句话复述 NOVA 的理解"}`;
+  const systemPrompt = "你是 NOVA Agent Foundry 的业务分析师。把用户的一句话需求提炼成可审阅、可编排的专业 Agent 业务摘要。不要虚构用户没有提供的数据；信息不足写入边界，不要反问。只输出一个 JSON 对象，不要 Markdown。";
+  const userPrompt = `用户需求：\n${goal}\n\n请严格按这个结构输出：${schema}`;
+  let firstOutput = "";
+  try {
+    firstOutput = await callWorkshopModel(connection, systemPrompt, userPrompt, {
+      timeoutMs: 65000,
+      outputTokens: 1200,
+      jsonMode: true
+    });
+    return normalizeAgentFoundryBrief(extractJsonObject(firstOutput));
+  } catch (firstError) {
+    const repairPrompt = `用户需求：\n${goal}\n\n上一份输出：\n${firstOutput.slice(0, 7000)}\n\n校验错误：${safeError(firstError)}\n\n请重新输出完整且合法的 JSON，结构必须是：${schema}`;
+    const repairedOutput = await callWorkshopModel(
+      connection,
+      `${systemPrompt} 这是结构修订请求，必须补齐所有字段。`,
+      repairPrompt,
+      { timeoutMs: 65000, outputTokens: 1200, jsonMode: true }
+    );
+    return normalizeAgentFoundryBrief(extractJsonObject(repairedOutput));
+  }
+}
+
 async function waitForWorkshopRetry(milliseconds, signal) {
   if (signal?.aborted) throw new Error("智能体编排已由用户停止。");
   await new Promise((resolve, reject) => {
@@ -1728,6 +2419,7 @@ function validateGeneratedAgentPack(result, details, request) {
     ["workflow-owner-integrity", "角色与工作流没有闭环"],
     ["independent-review", "缺少独立交付审查"],
     ["artifact-chain", "主交付物与证据链不完整"],
+    ["delivery-envelope", "统一输出与反馈契约缺失"],
     ["eval-contracts", "五类行为契约不完整"],
     ["sandbox-dry-run", "沙箱契约演练未通过"]
   ]) {
@@ -1945,6 +2637,8 @@ async function runModel(request) {
   const attachments = readApprovedAttachments(request?.attachments);
   const taskTitle = messages.findLast((item) => item.role === "user")?.content.slice(0, 80);
   const prompt = messages[messages.length - 1].content;
+  const workspaceRoot = path.resolve(String(request?.workspace || process.cwd()));
+  const workspaceBefore = snapshotWorkspace(workspaceRoot);
   const runId = String(request?.runId || crypto.randomUUID());
   let taskId;
   activeRuns.set(runId, null);
@@ -1957,11 +2651,19 @@ async function runModel(request) {
       provider,
       model,
       agentPackId: request?.agentPackId || null,
-      workspaceRoot: request?.workspace || process.cwd(),
+      workspaceRoot,
       mode: request?.executionMode || "Build"
     });
     taskId = task.id || task.taskId;
     activeRuns.set(runId, taskId);
+    publishGatewayHook("task.started", {
+      taskId,
+      title: taskTitle || "NOVA 任务",
+      provider,
+      model,
+      agentPackId: request?.agentPackId || null,
+      executionMode: request?.executionMode || "Build"
+    });
     if (cancelledRuns.has(runId)) {
       throw new Error("NOVA_RUN_CANCELLED");
     }
@@ -1980,8 +2682,16 @@ async function runModel(request) {
       }))
     });
     const output = String(result.output || "");
+    const artifacts = collectDeliveryArtifacts(
+      workspaceRoot,
+      workspaceBefore,
+      snapshotWorkspace(workspaceRoot),
+      output
+    );
     const requiresWorkspaceMutation = Boolean(result.requiresWorkspaceMutation);
-    const hasWorkspaceChanges = Number(result.mutatingToolCalls || 0) > 0;
+    // A tool claiming it wrote something is not proof of delivery. Completion
+    // requires at least one file that AgentOS can observe and present to the user.
+    const hasWorkspaceChanges = artifacts.length > 0;
     const hasValidationRun = Number(result.validationRuns || 0) > 0;
     let deliveryStatus =
       requiresWorkspaceMutation && (!hasWorkspaceChanges || !hasValidationRun)
@@ -2070,13 +2780,62 @@ async function runModel(request) {
       `- 文件写入：${hasWorkspaceChanges ? "有" : "无"}\n` +
       `- 本机验证步骤：${Number(result.validationRuns || 0)}` +
       verificationLine;
+    const delivery = {
+      schemaVersion: "1.0",
+      deliveryId: `delivery-${crypto.randomUUID().replaceAll("-", "")}`,
+      revision: 1,
+      status: deliveryStatus,
+      title: taskTitle || "本轮任务成果",
+      outcome: deliverySummary,
+      summary: deliverySummary,
+      requiresWorkspaceMutation,
+      hasWorkspaceChanges,
+      validationRuns: Number(result.validationRuns || 0),
+      artifacts,
+      evidence: [
+        ...(hasWorkspaceChanges ? [`检测到 ${artifacts.length} 个真实交付文件`] : []),
+        ...(hasValidationRun ? [`完成 ${Number(result.validationRuns || 0)} 项本机验证`] : []),
+        ...(verification?.verdict === "PASS" ? ["独立模型复核通过"] : [])
+      ],
+      incomplete: deliveryStatus === "PARTIAL" ? [deliverySummary] : [],
+      nextActions: deliveryStatus === "PARTIAL"
+        ? ["提交反馈并在当前任务中继续修复"]
+        : ["审查交付物并确认，或提交修改意见"],
+      outputFormat: {
+        contract: "nova.delivery/1.0",
+        sections: ["outcome", "artifacts", "evidence", "incomplete", "nextActions"],
+        artifactManifestRequired: true
+      },
+      agentPackId: request?.agentPackId || null,
+      reviewState: "unreviewed"
+    };
     await bridge.call("complete_task", {
       taskId,
       succeeded: true,
       outcome: partial ? "partial" : "completed",
       outputCharacters: persistedDraft.length,
       detail: `${deliveryStatus} · ${deliverySummary} · ${result.toolCalls || 0} 次工具调用 · ${result.mutatingToolCalls || 0} 次写操作`,
-      draft: persistedDraft
+      draft: persistedDraft,
+      delivery
+    });
+    for (const artifact of artifacts) {
+      publishGatewayHook("artifact.created", {
+        taskId,
+        artifact: sanitizeGatewayArtifact(artifact)
+      });
+    }
+    publishGatewayHook("delivery.ready", {
+      taskId,
+      delivery: {
+        deliveryId: delivery.deliveryId,
+        revision: delivery.revision,
+        status: delivery.status,
+        title: delivery.title,
+        outcome: delivery.outcome,
+        reviewState: delivery.reviewState,
+        artifactCount: delivery.artifacts.length,
+        artifacts: delivery.artifacts.map(sanitizeGatewayArtifact)
+      }
     });
     return {
       taskId,
@@ -2084,13 +2843,7 @@ async function runModel(request) {
       toolCalls: result.toolCalls || 0,
       mutatingToolCalls: result.mutatingToolCalls || 0,
       verification,
-      delivery: {
-        status: deliveryStatus,
-        summary: deliverySummary,
-        requiresWorkspaceMutation,
-        hasWorkspaceChanges,
-        validationRuns: Number(result.validationRuns || 0)
-      }
+      delivery
     };
   } catch (error) {
     if (cancelledRuns.delete(runId)) {
@@ -2113,6 +2866,127 @@ async function runModel(request) {
   }
 }
 
+const deliveryIgnoredDirectories = new Set([
+  ".git", ".svn", ".hg", ".nova", "node_modules", "bin", "obj", "dist", "build",
+  ".next", ".cache", ".pytest_cache", "coverage", "packages"
+]);
+
+function snapshotWorkspace(root) {
+  const files = new Map();
+  if (!root || !fs.existsSync(root)) return files;
+  const pending = [root];
+  let visited = 0;
+  while (pending.length && visited < 12000) {
+    const directory = pending.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (visited++ >= 12000) break;
+      if (entry.isSymbolicLink()) continue;
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (!deliveryIgnoredDirectories.has(entry.name.toLowerCase())) pending.push(fullPath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      try {
+        const stat = fs.statSync(fullPath);
+        files.set(fullPath.toLowerCase(), {
+          path: fullPath,
+          size: stat.size,
+          mtimeMs: stat.mtimeMs
+        });
+      } catch {
+        // Files may be atomically replaced while a tool is running.
+      }
+    }
+  }
+  return files;
+}
+
+function artifactKind(extension) {
+  if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"].includes(extension)) return "image";
+  if (extension === ".pdf") return "pdf";
+  if ([".doc", ".docx", ".docm", ".dotx", ".dotm"].includes(extension)) return "word";
+  if ([".xlsx", ".xls", ".ods"].includes(extension)) return "spreadsheet";
+  if ([".pptx", ".ppt", ".odp"].includes(extension)) return "presentation";
+  if ([".md", ".txt", ".json", ".csv", ".html", ".xml", ".yaml", ".yml", ".log"].includes(extension)) return "document";
+  return "file";
+}
+
+function deliveryArtifactPriority(root, filePath) {
+  const relative = path.relative(root, filePath).replaceAll("\\", "/").toLowerCase();
+  const base = path.basename(filePath).toLowerCase();
+  let score = 0;
+
+  if (/^(交付|成果|报告|deliverables?|reports?)\//i.test(relative)) score += 100;
+  if (/(入口|总览|摘要|简报|报告|结论|建议|方案|清单|readme|summary|report|result)/i.test(base)) score += 55;
+  if (/^(输入|解析结果|画像|审查|工具|input|raw|analysis|audit|tools?)\//i.test(relative)) score -= 35;
+  if (/(proof-of-done|test_|\.test\.|\.spec\.|sha256|raw_texts)/i.test(relative)) score -= 60;
+
+  return score;
+}
+
+function collectDeliveryArtifacts(root, before, after, output) {
+  const candidates = new Map();
+  for (const [key, file] of after) {
+    const previous = before.get(key);
+    if (!previous || previous.size !== file.size || previous.mtimeMs !== file.mtimeMs) {
+      candidates.set(key, file);
+    }
+  }
+  const marker = /\[\[NOVA_ARTIFACT\|([^|\]]+)\|([^\]]+)\]\]/g;
+  for (const match of String(output || "").matchAll(marker)) {
+    const declared = path.resolve(root, match[2].trim());
+    if (!isWithinRoot(declared, root) || !fs.existsSync(declared)) continue;
+    let stat;
+    try {
+      stat = fs.statSync(declared);
+    } catch {
+      // A declared artifact can disappear or become temporarily locked after the
+      // model returns. That must not turn an otherwise completed task into a failure.
+      continue;
+    }
+    if (!stat.isFile()) continue;
+    candidates.set(declared.toLowerCase(), {
+      path: declared,
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      label: match[1].trim()
+    });
+  }
+  return [...candidates.values()]
+    .map((file) => ({
+      ...file,
+      deliveryPriority: deliveryArtifactPriority(root, file.path)
+    }))
+    .sort((a, b) => b.deliveryPriority - a.deliveryPriority || b.mtimeMs - a.mtimeMs)
+    .slice(0, 80)
+    .map((file, index) => {
+      const extension = path.extname(file.path).toLowerCase();
+      return {
+        id: `artifact-${index + 1}-${crypto.createHash("sha1").update(file.path).digest("hex").slice(0, 10)}`,
+        title: file.label || path.basename(file.path),
+        path: file.path,
+        relativePath: path.relative(root, file.path),
+        kind: artifactKind(extension),
+        mediaType: extension.slice(1) || "file",
+        size: file.size,
+        modifiedAt: new Date(file.mtimeMs).toISOString(),
+        role: file.deliveryPriority >= 40
+          ? "primary"
+          : file.deliveryPriority <= -45
+            ? "evidence"
+            : "supporting",
+        previewable: true
+      };
+    });
+}
+
 function normalizedRoot(value) {
   if (!value) return null;
   return path.resolve(String(value)).replace(/[\\/]+$/, "").toLowerCase();
@@ -2128,7 +3002,7 @@ function isWithinRoot(candidate, root) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function readDeliveryArtifact(request) {
+async function readDeliveryArtifact(request) {
   const requestedPath = path.resolve(String(request?.path || ""));
   if (!requestedPath || !fs.existsSync(requestedPath)) {
     throw new Error("交付文件不存在，可能已被移动或删除。");
@@ -2153,6 +3027,49 @@ function readDeliveryArtifact(request) {
     ".md", ".txt", ".json", ".csv", ".html", ".xml", ".yaml", ".yml",
     ".js", ".jsx", ".ts", ".tsx", ".css", ".py", ".cs", ".sql", ".log"
   ]);
+  const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"]);
+  const documentExtensions = new Set([".pdf", ".doc", ".docx", ".docm", ".dotx", ".dotm"]);
+  if (imageExtensions.has(extension)) {
+    const stat = fs.statSync(requestedPath);
+    const mime = extension === ".svg"
+      ? "image/svg+xml"
+      : `image/${extension === ".jpg" ? "jpeg" : extension.slice(1)}`;
+    return {
+      path: requestedPath,
+      name: path.basename(requestedPath),
+      size: stat.size,
+      truncated: false,
+      kind: "image",
+      language: "image",
+      content: `data:${mime};base64,${fs.readFileSync(requestedPath).toString("base64")}`
+    };
+  }
+  if (documentExtensions.has(extension)) {
+    const stat = fs.statSync(requestedPath);
+    const extracted = await bridge.call("extract_delivery_document", { path: requestedPath });
+    return {
+      path: requestedPath,
+      name: path.basename(requestedPath),
+      size: stat.size,
+      truncated: false,
+      kind: "document",
+      language: extracted.format || extension.slice(1),
+      content: String(extracted.text || "（文档中没有可提取的文字，可使用系统应用查看原始版式。）")
+    };
+  }
+  const externalExtensions = new Set([".xlsx", ".xls", ".ods", ".pptx", ".ppt", ".odp", ".zip"]);
+  if (externalExtensions.has(extension)) {
+    const stat = fs.statSync(requestedPath);
+    return {
+      path: requestedPath,
+      name: path.basename(requestedPath),
+      size: stat.size,
+      truncated: false,
+      kind: "external",
+      language: extension.slice(1),
+      content: "该交付物需要使用系统应用查看。你仍可在本窗口提交文件级反馈。"
+    };
+  }
   if (!supported.has(extension)) {
     throw new Error("该文件不是可在窗体内安全预览的文本格式。");
   }
@@ -2238,6 +3155,45 @@ function createWindow() {
   }
 }
 
+function openKnowledgeWindow(workspace) {
+  if (knowledgeWindow && !knowledgeWindow.isDestroyed()) {
+    knowledgeWindow.show();
+    knowledgeWindow.focus();
+    return knowledgeWindow;
+  }
+  knowledgeWindow = new BrowserWindow({
+    width: 1320,
+    height: 840,
+    minWidth: 920,
+    minHeight: 640,
+    show: false,
+    frame: true,
+    autoHideMenuBar: true,
+    backgroundColor: "#11120f",
+    title: "NOVA 知识地图",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true
+    }
+  });
+  knowledgeWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  knowledgeWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+  knowledgeWindow.once("ready-to-show", () => knowledgeWindow?.show());
+  knowledgeWindow.on("closed", () => {
+    knowledgeWindow = null;
+  });
+  const query = { view: "knowledge", workspace: String(workspace || "") };
+  if (isDev) {
+    knowledgeWindow.loadURL(`http://127.0.0.1:5173/?${new URLSearchParams(query).toString()}`);
+  } else {
+    knowledgeWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"), { query });
+  }
+  return knowledgeWindow;
+}
+
 function registerIpc() {
   ipcMain.handle("nova:boot", async () => {
     const kernel = await bridge.call("boot");
@@ -2262,6 +3218,17 @@ function registerIpc() {
     rememberWorkspace(detail?.task?.workspaceRoot);
     return detail;
   });
+  ipcMain.handle("nova:get-task-capsule", async (event, request) => {
+    senderWindow(event);
+    const capsule = await bridge.call("get_task_capsule", { taskId: request?.taskId });
+    return sanitizeGatewayTaskCapsule(capsule);
+  });
+  ipcMain.handle("nova:get-context-budget", async (event, request) => {
+    senderWindow(event);
+    const result = await bridge.call("get_context_budget", request || {});
+    if (result?.capsule) result.capsule = sanitizeGatewayTaskCapsule(result.capsule);
+    return result;
+  });
   ipcMain.handle("nova:archive-task", (event, request) => {
     senderWindow(event);
     return bridge.call("archive_task", { taskId: request?.taskId });
@@ -2277,6 +3244,41 @@ function registerIpc() {
   ipcMain.handle("nova:read-delivery-artifact", (event, request) => {
     senderWindow(event);
     return readDeliveryArtifact(request);
+  });
+  ipcMain.handle("nova:open-delivery-artifact", async (event, request) => {
+    senderWindow(event);
+    const requestedPath = path.resolve(String(request?.path || ""));
+    const workspace = request?.workspace ? path.resolve(String(request.workspace)) : null;
+    const outputRoot = path.resolve(process.env.LOCALAPPDATA || app.getPath("userData"), "NOVA", "outputs");
+    const allowed = isWithinRoot(requestedPath, outputRoot)
+      || Boolean(workspace && approvedWorkspaceRoots.has(normalizedRoot(workspace)) && isWithinRoot(requestedPath, workspace));
+    if (!allowed) {
+      throw new Error("只能打开当前已授权工作区内的交付文件。");
+    }
+    const result = await shell.openPath(requestedPath);
+    if (result) throw new Error(result);
+    return { opened: true };
+  });
+  ipcMain.handle("nova:reveal-delivery-artifact", (event, request) => {
+    senderWindow(event);
+    const requestedPath = path.resolve(String(request?.path || ""));
+    const workspace = request?.workspace ? path.resolve(String(request.workspace)) : null;
+    const outputRoot = path.resolve(process.env.LOCALAPPDATA || app.getPath("userData"), "NOVA", "outputs");
+    const allowed = isWithinRoot(requestedPath, outputRoot)
+      || Boolean(workspace && approvedWorkspaceRoots.has(normalizedRoot(workspace)) && isWithinRoot(requestedPath, workspace));
+    if (!allowed) {
+      throw new Error("只能定位当前已授权工作区内的交付文件。");
+    }
+    shell.showItemInFolder(requestedPath);
+    return { revealed: true };
+  });
+  ipcMain.handle("nova:submit-delivery-feedback", (event, request) => {
+    senderWindow(event);
+    return bridge.call("submit_delivery_feedback", request || {});
+  });
+  ipcMain.handle("nova:accept-delivery", (event, request) => {
+    senderWindow(event);
+    return bridge.call("accept_delivery", request || {});
   });
   ipcMain.handle("nova:select-workspace", async (event) => {
     const result = await dialog.showOpenDialog(senderWindow(event), {
@@ -2382,6 +3384,14 @@ function registerIpc() {
     const taskId = activeRuns.get(runId);
     if (!taskId) return { cancelled: true };
     return bridge.call("cancel_task", { taskId });
+  });
+  ipcMain.handle("nova:resolve-tool-approval", (event, request) => {
+    senderWindow(event);
+    return bridge.call("resolve_tool_approval", {
+      approvalId: request?.approvalId,
+      approved: request?.approved === true,
+      rememberForTask: request?.rememberForTask === true
+    });
   });
   ipcMain.handle("nova:list-capabilities", (event, request) => {
     senderWindow(event);
@@ -2517,6 +3527,10 @@ function registerIpc() {
     senderWindow(event);
     return bridge.call("recommend_agent_pack", request || {});
   });
+  ipcMain.handle("nova:prepare-agent-pack", async (event, request) => {
+    senderWindow(event);
+    return prepareAgentFoundryBrief(request || {});
+  });
   ipcMain.handle("nova:get-agent-workshop-session", (event) => {
     senderWindow(event);
     return latestWorkshopSession();
@@ -2635,23 +3649,51 @@ function registerIpc() {
     return bridge.call("get_living_memory");
   });
   ipcMain.handle("nova:get-knowledge-state", (event, request) => {
-    senderWindow(event);
+    knowledgeSenderWindow(event);
     return bridge.call("get_knowledge_state", {
       workspaceRoot: request?.workspace || null
     });
   });
-  ipcMain.handle("nova:index-workspace-knowledge", (event, request) => {
+  ipcMain.handle("nova:open-knowledge-window", (event, request) => {
     senderWindow(event);
+    openKnowledgeWindow(request?.workspace || null);
+    return { opened: true };
+  });
+  ipcMain.handle("nova:index-workspace-knowledge", (event, request) => {
+    knowledgeSenderWindow(event);
     return bridge.call("index_workspace_knowledge", {
       workspaceRoot: request?.workspace
     });
   });
   ipcMain.handle("nova:search-workspace-knowledge", (event, request) => {
-    senderWindow(event);
+    knowledgeSenderWindow(event);
     return bridge.call("search_workspace_knowledge", {
       workspaceRoot: request?.workspace || null,
       query: request?.query,
       maximumResults: request?.maximumResults || 12
+    });
+  });
+  ipcMain.handle("nova:delete-knowledge-node", async (event, request) => {
+    const window = knowledgeSenderWindow(event);
+    const confirmation = await dialog.showMessageBox(window, {
+      type: "warning",
+      title: "从知识图谱移除",
+      message: `从知识图谱移除“${String(request?.label || "这条知识")}”？`,
+      detail: "只会移除图谱节点与派生映射，不会删除原始任务、对话或工作区文件。",
+      buttons: ["取消", "移除节点"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true
+    });
+    if (confirmation.response !== 1) return { deleted: false, canceled: true };
+    return bridge.call("delete_knowledge_node", { nodeId: request?.nodeId });
+  });
+  ipcMain.handle("nova:review-knowledge-mapping", (event, request) => {
+    knowledgeSenderWindow(event);
+    return bridge.call("review_knowledge_mapping", {
+      sourceId: request?.sourceId,
+      targetId: request?.targetId,
+      accepted: request?.accepted === true
     });
   });
   ipcMain.handle("nova:analyze-living-memory", (event) => {
@@ -2757,6 +3799,50 @@ function registerIpc() {
     senderWindow(event);
     return readExtensionProfiles();
   });
+  ipcMain.handle("nova:get-extension-gateway", (event) => {
+    senderWindow(event);
+    return gatewayStatus(true);
+  });
+  ipcMain.handle("nova:list-gateway-action-requests", (event) => {
+    senderWindow(event);
+    return readGatewayActionRequests().filter((item) => item.status === "pending");
+  });
+  ipcMain.handle("nova:resolve-gateway-action-request", (event, request) => {
+    senderWindow(event);
+    return resolveGatewayActionRequest(String(request?.id || ""), String(request?.status || ""));
+  });
+  ipcMain.handle("nova:set-extension-gateway-enabled", async (event, request) => {
+    senderWindow(event);
+    const enabled = request?.enabled === true;
+    const profiles = readExtensionProfiles();
+    await writeExtensionProfiles({ ...profiles, gateway: { enabled } });
+    if (enabled) await startExtensionGateway();
+    else await stopExtensionGateway();
+    return gatewayStatus(true);
+  });
+  ipcMain.handle("nova:rotate-extension-gateway-token", (event) => {
+    senderWindow(event);
+    if (!extensionGateway.server?.listening) {
+      throw new Error("服务接口尚未启动。");
+    }
+    extensionGateway.token = crypto.randomBytes(32).toString("base64url");
+    for (const client of extensionGateway.clients) client.end();
+    extensionGateway.clients.clear();
+    return gatewayStatus(true);
+  });
+  ipcMain.handle("nova:copy-extension-gateway-token", (event) => {
+    senderWindow(event);
+    if (!extensionGateway.token) throw new Error("服务接口尚未启动。");
+    clipboard.writeText(extensionGateway.token);
+    return { copied: true };
+  });
+  ipcMain.handle("nova:copy-extension-gateway-url", (event) => {
+    senderWindow(event);
+    const status = gatewayStatus(false);
+    if (!status.baseUrl) throw new Error("服务接口尚未启动。");
+    clipboard.writeText(status.baseUrl);
+    return { copied: true };
+  });
   ipcMain.handle("nova:save-ssh-profile", async (event, request) => {
     senderWindow(event);
     const profile = normalizeSshProfile(request);
@@ -2798,8 +3884,17 @@ function createBridgeClient() {
     if (eventName === "agent_event" && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("nova:agent-event", payload);
     }
+    if (eventName === "approval_request" && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("nova:tool-approval-request", payload);
+    }
     if (eventName === "design_event") {
       acceptWorkshopRuntimeEvent(payload);
+    }
+    if (eventName === "context_event") {
+      publishGatewayHook("context.compiled", payload);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("nova:context-event", payload);
+      }
     }
     if (eventName === "evolution_event" && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("nova:evolution-event", payload);
@@ -2811,11 +3906,58 @@ function createBridgeClient() {
 app.whenReady().then(async () => {
   if (!ownsInstance) return;
   bridge = createBridgeClient();
+  try {
+    await startExtensionGateway(isSmoke);
+  } catch (error) {
+    console.error(`[Extension Gateway] ${safeError(error)}`);
+  }
   session.defaultSession.setPermissionCheckHandler(() => false);
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) =>
     callback(false)
   );
   registerIpc();
+
+  if (isKnowledgeWindowSmoke) {
+    try {
+      await bridge.call("boot");
+      const window = openKnowledgeWindow(null);
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("知识地图窗体加载超时。")), 20000);
+        window.webContents.once("did-finish-load", () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      const bodyText = await window.webContents.executeJavaScript("document.body.innerText", true);
+      if (!String(bodyText).includes("知识地图") || String(bodyText).includes("无效窗口调用")) {
+        throw new Error("知识地图窗体未能通过独立 IPC 身份校验。");
+      }
+      console.log("NOVA_KNOWLEDGE_WINDOW_SMOKE_OK");
+      window.destroy();
+      bridge.stop();
+      process.exit(0);
+    } catch (error) {
+      console.error(`NOVA_KNOWLEDGE_WINDOW_SMOKE_FAILED: ${safeError(error)}`);
+      bridge.stop();
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (isGatewaySmoke) {
+    try {
+      await smokeExtensionGateway(false);
+      console.log("NOVA_EXTENSION_GATEWAY_SMOKE_OK");
+      await stopExtensionGateway();
+      process.exit(0);
+    } catch (error) {
+      console.error(`NOVA_EXTENSION_GATEWAY_SMOKE_FAILED: ${safeError(error)}`);
+      await stopExtensionGateway();
+      process.exit(1);
+    }
+    return;
+  }
 
   if (isWorkshopRecoverySmoke) {
     try {
@@ -2863,6 +4005,7 @@ app.whenReady().then(async () => {
       await bridge.call("boot");
       await bridge.call("health");
       await bridge.call("list_tasks");
+      await smokeExtensionGateway();
       console.log("NOVA_ELECTRON_SMOKE_OK");
       bridge.stop();
       setTimeout(() => process.exit(0), 100);
@@ -2885,8 +4028,12 @@ app.on("second-instance", () => {
 });
 
 app.on("window-all-closed", () => {
+  void stopExtensionGateway();
   bridge?.stop();
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => bridge?.stop());
+app.on("before-quit", () => {
+  void stopExtensionGateway();
+  bridge?.stop();
+});

@@ -1,0 +1,41 @@
+{
+  "workflowVersion": "1.0",
+  "id": "maimai-relationship-research",
+  "name": "脉脉本地档案筛选与人工联系准备",
+  "executionMode": "goal",
+  "resultContract": "delivery-templates/shortlist.md",
+  "steps": [
+    {
+      "id": "freeze-target",
+      "agent": "关系研究员",
+      "title": "确认目标、用途、筛选条件与禁止动作",
+      "dependsOn": [],
+      "outputs": ["研究目标.json"],
+      "acceptance": ["目标和用途明确", "确认不自动登录、不批量采集、不自动发送消息"]
+    },
+    {
+      "id": "search-local-vault",
+      "agent": "关系研究员",
+      "title": "检索用户已保存的本地加密档案",
+      "dependsOn": ["freeze-target"],
+      "outputs": ["候选初筛.json"],
+      "acceptance": ["只调用 nova-maimai 工具", "每个入选理由均对应已保存字段"]
+    },
+    {
+      "id": "human-contact-brief",
+      "agent": "沟通准备员",
+      "title": "生成人工联系要点与待确认问题",
+      "dependsOn": ["search-local-vault"],
+      "outputs": ["人工联系准备.md"],
+      "acceptance": ["不声称已发送消息", "不补造联系方式或未保存经历"]
+    },
+    {
+      "id": "proof-of-done",
+      "agent": "合规审计员",
+      "title": "核对来源、保留期限和交付边界",
+      "dependsOn": ["human-contact-brief"],
+      "outputs": ["脉脉关系研究清单.md", "完成证据.json"],
+      "acceptance": ["事实、推断和未知项分开", "列出人工复核步骤和到期治理状态"]
+    }
+  ]
+}

@@ -1,0 +1,101 @@
+{
+  "manifestVersion": "1.0",
+  "id": "nova.maimai-relationship-research",
+  "name": "NOVA 脉脉人才关系研究 Agent",
+  "version": "1.0.0",
+  "status": "stable",
+  "category": "人才与商务关系",
+  "description": "基于用户主动保存的脉脉可见职业信息，完成合规检索、候选人筛选、人工联系准备与留存治理；不自动访问账号或发送消息。",
+  "novaCompatibility": ">=1.0.4 <2.0.0",
+  "creationStandard": {
+    "version": "1.0",
+    "scenarioProfile": "operation",
+    "autonomyLevel": "assist",
+    "lifecycle": "project",
+    "collaborationMode": "independent",
+    "deliveryMode": "mixed",
+    "decisionStyle": "compliance-first"
+  },
+  "inputContract": {
+    "required": ["明确的人才或商务目标", "用户主动保存的脉脉档案"],
+    "recommended": ["目标公司、岗位、地区和技能约束"],
+    "missingDataPolicy": "preserve-unknowns-and-lower-confidence"
+  },
+  "outputContract": {
+    "primaryArtifact": "脉脉关系研究清单.md",
+    "mustPersist": true,
+    "evidenceRequired": true,
+    "proofOfDoneRequired": true
+  },
+  "calibrationContract": {
+    "scopes": ["turn", "project"],
+    "patchOnly": true,
+    "regressionRequired": true,
+    "rollbackRequired": true
+  },
+  "collaborationContract": {
+    "mode": "independent",
+    "typedDelegationRequired": true,
+    "artifactHandoffRequired": true,
+    "maxDelegationDepth": 0
+  },
+  "declaredCapabilities": [
+    "maimai-local-profile-search",
+    "candidate-shortlisting",
+    "manual-contact-preparation",
+    "retention-governance"
+  ],
+  "permissions": [],
+  "capabilityRequirements": {
+    "version": "1.0",
+    "items": [
+      {
+        "id": "maimai-safe-connector",
+        "kind": "mcp",
+        "name": "NOVA 脉脉安全连接器",
+        "reason": "只检索用户通过 Chrome 扩展主动保存到本地加密仓的当前可见职业信息。",
+        "required": true,
+        "matchIds": ["nova-maimai"]
+      }
+    ]
+  },
+  "starterPrompts": [
+    "从我已保存的脉脉档案里，筛选上海地区懂 AgentOS 和企业软件的人，给出证据与待确认项。",
+    "列出当前 shortlisted 的人，并为每个人生成一条人工联系前的个性化沟通要点；不要替我发送。",
+    "检查本地脉脉档案的状态和最早到期时间，清理已过期档案。"
+  ],
+  "onboarding": {
+    "version": "1.0",
+    "headline": "先明确目标，再检索本地加密档案",
+    "description": "此 Agent 不登录脉脉，也不自动采集。请先用配套 Chrome 扩展逐页核对并保存当前可见档案。",
+    "steps": [
+      {
+        "id": "target",
+        "title": "本次要找什么人",
+        "description": "说明岗位、公司、地区、技能或商务场景。",
+        "kind": "text",
+        "required": true,
+        "placeholder": "例如：上海，AI 产品负责人，有企业软件经验",
+        "options": [],
+        "whyItMatters": "目标决定检索条件与入选依据。",
+        "example": "优先寻找近两年有智能体落地经验的企业软件产品负责人。"
+      }
+    ],
+    "outcomes": [
+      {
+        "id": "shortlist",
+        "title": "生成候选清单",
+        "description": "从已保存档案中筛选，并保留证据与未知项。",
+        "promptTemplate": "目标：{{target}}。只调用 nova-maimai 中的本地检索工具。生成候选清单，说明匹配证据、未知项和人工核对建议；不得访问脉脉账号或自动发送消息。"
+      }
+    ]
+  },
+  "externalActions": {
+    "accountAccess": "not-supported",
+    "automatedBrowsing": "not-supported",
+    "messaging": "not-supported",
+    "localProfileDeletion": "approval-required"
+  },
+  "entryWorkflow": "workflows/relationship-research.json",
+  "evaluationSuite": "evaluations/safe-local-search.json"
+}

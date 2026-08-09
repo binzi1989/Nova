@@ -15,23 +15,49 @@ public sealed record KnowledgeNode(
     string Detail,
     double Weight,
     bool IsManual,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt)
+{
+    public string SourceType { get; init; } = string.Empty;
+    public string SourceId { get; init; } = string.Empty;
+    public string SourceLabel { get; init; } = string.Empty;
+    public bool IsDeletable { get; init; }
+}
 
 public sealed record KnowledgeEdge(
     string SourceId,
     string TargetId,
     string Relation,
-    double Weight);
+    double Weight)
+{
+    public bool IsInferred { get; init; }
+    public double Confidence { get; init; } = 1;
+    public string Evidence { get; init; } = string.Empty;
+    public string ReviewState { get; init; } = "evidence";
+}
 
 public sealed record KnowledgeGraphSnapshot(
     DateTimeOffset UpdatedAt,
     IReadOnlyList<KnowledgeNode> Nodes,
     IReadOnlyList<KnowledgeEdge> Edges);
 
+public sealed record KnowledgeInputRecord(
+    string Id,
+    string TaskId,
+    string TaskTitle,
+    string WorkspaceRoot,
+    string Content,
+    DateTimeOffset CreatedAt);
+
 public sealed class KnowledgeGraphService
 {
     private const int MaximumNodes = 300;
     private const int MaximumEdges = 1000;
+    private static readonly Regex ApiCredentialPattern = new(
+        @"(?i)\b(sk-[a-z0-9_-]{8,}|bearer\s+[a-z0-9._~+/=-]{8,})",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex SecretAssignmentPattern = new(
+        @"(?i)\b(api[_-]?key|access[_-]?token|secret|password)\s*[:=]\s*[\""']?[^\s,;\""']{5,}",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private readonly string _graphPath;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly JsonSerializerOptions _options = new()
@@ -83,10 +109,12 @@ public sealed class KnowledgeGraphService
         {
             var existing = GetSnapshot();
             var nodes = existing.Nodes
-                .Where(node => node.IsManual)
+                .Where(node => node.IsManual
+                               || node.SourceType.Equals(
+                                   "conversation",
+                                   StringComparison.OrdinalIgnoreCase))
                 .ToDictionary(node => node.Id, StringComparer.OrdinalIgnoreCase);
             var edges = existing.Edges
-                .Where(edge => nodes.ContainsKey(edge.SourceId) && nodes.ContainsKey(edge.TargetId))
                 .ToDictionary(EdgeKey, StringComparer.OrdinalIgnoreCase);
             var now = DateTimeOffset.Now;
 
@@ -104,7 +132,11 @@ public sealed class KnowledgeGraphService
                     task.Prompt,
                     task.State == Models.TaskState.Completed ? 2 : 1.3,
                     false,
-                    task.UpdatedAt);
+                    task.UpdatedAt,
+                    "task",
+                    task.TaskId,
+                    task.Title);
+                var workspaceSource = NormalizeWorkspaceSource(task.WorkspaceRoot);
                 var workspaceLabel = string.IsNullOrWhiteSpace(task.WorkspaceRoot)
                     ? "未指定工作区"
                     : Path.GetFileName(task.WorkspaceRoot.TrimEnd(Path.DirectorySeparatorChar))
@@ -112,13 +144,16 @@ public sealed class KnowledgeGraphService
                 var workspace = PutNode(
                     nodes,
                     "workspace",
-                    task.WorkspaceRoot,
+                    workspaceSource,
                     workspaceLabel,
                     "Project",
-                    task.WorkspaceRoot,
+                    workspaceSource,
                     1.5,
                     false,
-                    task.UpdatedAt);
+                    task.UpdatedAt,
+                    "workspace",
+                    workspaceSource,
+                    workspaceLabel);
                 Link(edges, taskNode, workspace, "belongs to", 1.4);
 
                 var provider = PutNode(
@@ -238,17 +273,21 @@ public sealed class KnowledgeGraphService
                     document.RelativePath,
                     1.15,
                     false,
-                    document.IndexedAt);
+                    document.IndexedAt,
+                    "document",
+                    document.Id,
+                    document.RelativePath);
+                var workspaceSource = NormalizeWorkspaceSource(document.WorkspaceRoot);
                 var workspaceLabel = Path.GetFileName(
                                          document.WorkspaceRoot.TrimEnd(Path.DirectorySeparatorChar))
                                      ?? document.WorkspaceRoot;
                 var workspace = PutNode(
                     nodes,
                     "workspace",
-                    document.WorkspaceRoot,
+                    workspaceSource,
                     workspaceLabel,
                     "Project",
-                    document.WorkspaceRoot,
+                    workspaceSource,
                     1.5,
                     false,
                     document.IndexedAt);
@@ -281,7 +320,10 @@ public sealed class KnowledgeGraphService
                     $"{artifact.Type} · {artifact.Location}",
                     1.7,
                     false,
-                    artifact.CreatedAt ?? now);
+                    artifact.CreatedAt ?? now,
+                    "artifact",
+                    artifact.Id,
+                    artifact.Title);
                 var task = PutNode(
                     nodes,
                     "task",
@@ -295,11 +337,15 @@ public sealed class KnowledgeGraphService
                     $"交付物来源：{artifact.Title}",
                     1.4,
                     false,
-                    artifact.CreatedAt ?? now);
+                    artifact.CreatedAt ?? now,
+                    "task",
+                    artifact.TaskId,
+                    artifact.Title);
                 Link(edges, task, artifactNode, "delivers", 1.6);
 
                 if (!string.IsNullOrWhiteSpace(artifact.WorkspaceRoot))
                 {
+                    var workspaceSource = NormalizeWorkspaceSource(artifact.WorkspaceRoot);
                     var workspaceLabel = Path.GetFileName(
                                              artifact.WorkspaceRoot.TrimEnd(
                                                  Path.DirectorySeparatorChar))
@@ -307,10 +353,10 @@ public sealed class KnowledgeGraphService
                     var workspace = PutNode(
                         nodes,
                         "workspace",
-                        artifact.WorkspaceRoot,
+                        workspaceSource,
                         workspaceLabel,
                         "Project",
-                        artifact.WorkspaceRoot,
+                        workspaceSource,
                         1.5,
                         false,
                         artifact.CreatedAt ?? now);
@@ -334,6 +380,7 @@ public sealed class KnowledgeGraphService
                 }
             }
 
+            AddInferredMappings(nodes, edges);
             var snapshot = new KnowledgeGraphSnapshot(
                 now,
                 nodes.Values
@@ -354,6 +401,238 @@ public sealed class KnowledgeGraphService
             };
             await SaveAsync(snapshot, cancellationToken);
             return snapshot;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<KnowledgeNode> IngestInputAsync(
+        KnowledgeInputRecord input,
+        CancellationToken cancellationToken = default)
+    {
+        var content = SanitizeKnowledgeText(input.Content);
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            throw new InvalidOperationException("用户输入在脱敏后没有可索引内容。");
+        }
+
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var snapshot = GetSnapshot();
+            var nodes = snapshot.Nodes.ToDictionary(
+                node => node.Id,
+                StringComparer.OrdinalIgnoreCase);
+            var edges = snapshot.Edges.ToDictionary(
+                EdgeKey,
+                StringComparer.OrdinalIgnoreCase);
+            var taskNode = PutNode(
+                nodes,
+                "task",
+                input.TaskId,
+                input.TaskTitle,
+                "Goal",
+                $"用户输入来源：{input.TaskTitle}",
+                1.5,
+                false,
+                input.CreatedAt,
+                "task",
+                input.TaskId,
+                input.TaskTitle);
+            var workspaceSource = NormalizeWorkspaceSource(input.WorkspaceRoot);
+            var workspaceLabel = string.IsNullOrWhiteSpace(input.WorkspaceRoot)
+                ? "我的知识"
+                : Path.GetFileName(input.WorkspaceRoot.TrimEnd(Path.DirectorySeparatorChar))
+                  ?? "当前工作区";
+            var workspaceNode = PutNode(
+                nodes,
+                "workspace",
+                workspaceSource,
+                workspaceLabel,
+                "KnowledgeSpace",
+                "本机知识空间",
+                1.8,
+                false,
+                input.CreatedAt,
+                "workspace",
+                workspaceSource,
+                workspaceLabel);
+            Link(edges, taskNode, workspaceNode, "belongs to", 1.4);
+
+            var inputNode = PutNode(
+                nodes,
+                "input",
+                input.Id,
+                CreateInputLabel(content),
+                "Input",
+                content,
+                2.1,
+                false,
+                input.CreatedAt,
+                "conversation",
+                input.Id,
+                input.TaskTitle,
+                true);
+            Link(edges, inputNode, taskNode, "contributes to", 1.8);
+            foreach (var concept in ExtractConcepts(content).Take(6))
+            {
+                var conceptNode = PutNode(
+                    nodes,
+                    "concept",
+                    concept,
+                    concept,
+                    "Concept",
+                    $"来自用户输入：{input.TaskTitle}",
+                    1.15,
+                    false,
+                    input.CreatedAt,
+                    "conversation",
+                    input.Id,
+                    input.TaskTitle);
+                Link(edges, inputNode, conceptNode, "mentions", 1.2);
+            }
+
+            AddInferredMappings(nodes, edges);
+            var updated = LimitGraph(nodes.Values, edges.Values, DateTimeOffset.Now);
+            await SaveAsync(updated, cancellationToken);
+            return updated.Nodes.First(node => node.Id == inputNode);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public KnowledgeGraphSnapshot CreateView(
+        string? workspaceRoot,
+        string? query = null,
+        int maximumNodes = 120)
+    {
+        var snapshot = GetSnapshot();
+        maximumNodes = Math.Clamp(maximumNodes, 1, 200);
+        query = query?.Trim();
+        var allowed = snapshot.Nodes.Select(node => node.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(workspaceRoot))
+        {
+            var workspaceId = CreateId("workspace", NormalizeWorkspaceSource(workspaceRoot));
+            // A workspace view is an isolation boundary. Inferred mappings may
+            // connect similar knowledge across spaces, but they must not pull
+            // another workspace's private nodes into the current view.
+            allowed = ExpandRelated(snapshot, [workspaceId], maximumDepth: 3, includeInferred: false);
+        }
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            var matched = snapshot.Nodes
+                .Where(node => allowed.Contains(node.Id)
+                               && (node.Label.Contains(query, StringComparison.CurrentCultureIgnoreCase)
+                                   || node.Detail.Contains(query, StringComparison.CurrentCultureIgnoreCase)
+                                   || node.Kind.Contains(query, StringComparison.OrdinalIgnoreCase)))
+                .Select(node => node.Id)
+                .ToArray();
+            allowed.IntersectWith(ExpandRelated(snapshot, matched, maximumDepth: 1));
+        }
+        var nodes = snapshot.Nodes
+            .Where(node => allowed.Contains(node.Id))
+            .OrderByDescending(node => node.Weight)
+            .ThenByDescending(node => node.UpdatedAt)
+            .Take(maximumNodes)
+            .ToArray();
+        var retained = nodes.Select(node => node.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return new KnowledgeGraphSnapshot(
+            snapshot.UpdatedAt,
+            nodes,
+            snapshot.Edges
+                .Where(edge => retained.Contains(edge.SourceId)
+                               && retained.Contains(edge.TargetId)
+                               && !edge.ReviewState.Equals("rejected", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(edge => edge.Weight)
+                .Take(MaximumEdges)
+                .ToArray());
+    }
+
+    public async Task<bool> DeleteNodeAsync(
+        string nodeId,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var snapshot = GetSnapshot();
+            var node = snapshot.Nodes.FirstOrDefault(item =>
+                item.Id.Equals(nodeId, StringComparison.OrdinalIgnoreCase));
+            if (node is null) return false;
+            if (!node.IsManual && !node.IsDeletable)
+            {
+                throw new InvalidOperationException("系统生成的任务、文档和关系节点不能单独删除。");
+            }
+            var removedIds = snapshot.Nodes
+                .Where(item => item.Id.Equals(nodeId, StringComparison.OrdinalIgnoreCase)
+                               || (node.SourceType.Equals("conversation", StringComparison.OrdinalIgnoreCase)
+                                   && item.SourceType.Equals("conversation", StringComparison.OrdinalIgnoreCase)
+                                   && item.SourceId.Equals(node.SourceId, StringComparison.OrdinalIgnoreCase)))
+                .Select(item => item.Id)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var updated = new KnowledgeGraphSnapshot(
+                DateTimeOffset.Now,
+                snapshot.Nodes.Where(item => !removedIds.Contains(item.Id)).ToArray(),
+                snapshot.Edges.Where(edge =>
+                    !removedIds.Contains(edge.SourceId)
+                    && !removedIds.Contains(edge.TargetId)).ToArray());
+            await SaveAsync(updated, cancellationToken);
+            return true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<KnowledgeEdge> ReviewMappingAsync(
+        string sourceId,
+        string targetId,
+        bool accepted,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var snapshot = GetSnapshot();
+            var existing = snapshot.Edges.FirstOrDefault(edge =>
+                ((edge.SourceId.Equals(sourceId, StringComparison.OrdinalIgnoreCase)
+                  && edge.TargetId.Equals(targetId, StringComparison.OrdinalIgnoreCase))
+                 || (edge.SourceId.Equals(targetId, StringComparison.OrdinalIgnoreCase)
+                     && edge.TargetId.Equals(sourceId, StringComparison.OrdinalIgnoreCase)))
+                && edge.Relation.Equals("potential mapping", StringComparison.OrdinalIgnoreCase));
+            if (existing is null)
+            {
+                throw new InvalidOperationException("这条候选映射已经不存在，请刷新知识网络后重试。");
+            }
+
+            var edges = snapshot.Edges.ToDictionary(EdgeKey, StringComparer.OrdinalIgnoreCase);
+            edges.Remove(EdgeKey(existing));
+            var reviewed = new KnowledgeEdge(
+                existing.SourceId,
+                existing.TargetId,
+                accepted ? "confirmed mapping" : "potential mapping",
+                accepted ? Math.Max(existing.Weight, 1.35) : existing.Weight)
+            {
+                IsInferred = !accepted,
+                Confidence = accepted ? 1 : existing.Confidence,
+                Evidence = accepted
+                    ? "用户已确认：" + existing.Evidence
+                    : "用户已否决：" + existing.Evidence,
+                ReviewState = accepted ? "accepted" : "rejected"
+            };
+            edges[EdgeKey(reviewed)] = reviewed;
+            await SaveAsync(new KnowledgeGraphSnapshot(
+                DateTimeOffset.Now,
+                snapshot.Nodes,
+                edges.Values.TakeLast(MaximumEdges).ToArray()), cancellationToken);
+            return reviewed;
         }
         finally
         {
@@ -389,7 +668,13 @@ public sealed class KnowledgeGraphService
                 detail,
                 1.8,
                 true,
-                DateTimeOffset.Now);
+                DateTimeOffset.Now)
+            {
+                SourceType = "manual",
+                SourceId = label,
+                SourceLabel = "手动知识",
+                IsDeletable = true
+            };
             var nodes = snapshot.Nodes.Append(node).TakeLast(MaximumNodes).ToArray();
             var edges = snapshot.Edges.ToList();
             if (!string.IsNullOrWhiteSpace(relatedNodeId)
@@ -472,6 +757,108 @@ public sealed class KnowledgeGraphService
         }
     }
 
+    private static KnowledgeGraphSnapshot LimitGraph(
+        IEnumerable<KnowledgeNode> sourceNodes,
+        IEnumerable<KnowledgeEdge> sourceEdges,
+        DateTimeOffset updatedAt)
+    {
+        var nodes = sourceNodes
+            .OrderByDescending(node => node.IsManual || node.IsDeletable)
+            .ThenByDescending(node => node.Weight)
+            .ThenByDescending(node => node.UpdatedAt)
+            .Take(MaximumNodes)
+            .ToArray();
+        var retained = nodes.Select(node => node.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return new KnowledgeGraphSnapshot(
+            updatedAt,
+            nodes,
+            sourceEdges
+                .Where(edge => retained.Contains(edge.SourceId)
+                               && retained.Contains(edge.TargetId))
+                .OrderByDescending(edge => edge.Weight)
+                .Take(MaximumEdges)
+                .ToArray());
+    }
+
+    private static HashSet<string> ExpandRelated(
+        KnowledgeGraphSnapshot snapshot,
+        IEnumerable<string> seeds,
+        int maximumDepth,
+        bool includeInferred = true)
+    {
+        var adjacency = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var edge in snapshot.Edges)
+            {
+                if (edge.ReviewState.Equals("rejected", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                if (!includeInferred && edge.IsInferred)
+                {
+                    continue;
+                }
+
+            if (!adjacency.TryGetValue(edge.SourceId, out var source))
+            {
+                source = [];
+                adjacency[edge.SourceId] = source;
+            }
+            if (!adjacency.TryGetValue(edge.TargetId, out var target))
+            {
+                target = [];
+                adjacency[edge.TargetId] = target;
+            }
+            source.Add(edge.TargetId);
+            target.Add(edge.SourceId);
+        }
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var queue = new Queue<(string Id, int Depth)>();
+        foreach (var seed in seeds.Where(value => !string.IsNullOrWhiteSpace(value)))
+        {
+            if (visited.Add(seed)) queue.Enqueue((seed, 0));
+        }
+        while (queue.TryDequeue(out var current))
+        {
+            if (current.Depth >= maximumDepth
+                || !adjacency.TryGetValue(current.Id, out var related)) continue;
+            foreach (var nodeId in related)
+            {
+                if (visited.Add(nodeId)) queue.Enqueue((nodeId, current.Depth + 1));
+            }
+        }
+        return visited;
+    }
+
+    private static string SanitizeKnowledgeText(string value)
+    {
+        value = ApiCredentialPattern.Replace(value ?? string.Empty, "[已脱敏凭据]");
+        value = SecretAssignmentPattern.Replace(value, match =>
+            match.Groups[1].Value + "=[已脱敏]");
+        return Trim(value, 2000);
+    }
+
+    private static string CreateInputLabel(string content)
+    {
+        var normalized = Regex.Replace(content, @"\s+", " ").Trim();
+        if (normalized.Length <= 72) return normalized;
+        return normalized[..72] + "…";
+    }
+
+    private static string NormalizeWorkspaceSource(string? workspaceRoot)
+    {
+        if (string.IsNullOrWhiteSpace(workspaceRoot)) return "personal";
+        try
+        {
+            return Path.GetFullPath(workspaceRoot)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        {
+            return workspaceRoot.Trim();
+        }
+    }
+
     private static string PutNode(
         IDictionary<string, KnowledgeNode> nodes,
         string scope,
@@ -481,7 +868,11 @@ public sealed class KnowledgeGraphService
         string detail,
         double weight,
         bool isManual,
-        DateTimeOffset updatedAt)
+        DateTimeOffset updatedAt,
+        string sourceType = "",
+        string metadataSourceId = "",
+        string sourceLabel = "",
+        bool isDeletable = false)
     {
         var id = CreateId(scope, sourceId);
         nodes[id] = new KnowledgeNode(
@@ -491,7 +882,13 @@ public sealed class KnowledgeGraphService
             Trim(detail, 2000),
             weight,
             isManual,
-            updatedAt);
+            updatedAt)
+        {
+            SourceType = sourceType,
+            SourceId = metadataSourceId,
+            SourceLabel = Trim(sourceLabel, 160),
+            IsDeletable = isDeletable
+        };
         return id;
     }
 
@@ -500,14 +897,96 @@ public sealed class KnowledgeGraphService
         string source,
         string target,
         string relation,
-        double weight)
+        double weight,
+        bool isInferred = false,
+        double confidence = 1,
+        string evidence = "",
+        string? reviewState = null)
     {
-        var edge = new KnowledgeEdge(source, target, relation, weight);
+        var edge = new KnowledgeEdge(source, target, relation, weight)
+        {
+            IsInferred = isInferred,
+            Confidence = Math.Clamp(confidence, 0, 1),
+            Evidence = Trim(evidence, 500),
+            ReviewState = reviewState ?? (isInferred ? "suggested" : "evidence")
+        };
         edges[EdgeKey(edge)] = edge;
+    }
+
+    private static void AddInferredMappings(
+        IReadOnlyDictionary<string, KnowledgeNode> nodes,
+        IDictionary<string, KnowledgeEdge> edges)
+    {
+        var rejectedPairs = edges.Values
+            .Where(edge => edge.ReviewState.Equals("rejected", StringComparison.OrdinalIgnoreCase))
+            .Select(edge => PairKey(edge.SourceId, edge.TargetId))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in edges
+                     .Where(item => item.Value.IsInferred
+                                    && !item.Value.ReviewState.Equals("rejected", StringComparison.OrdinalIgnoreCase))
+                     .Select(item => item.Key)
+                     .ToArray())
+        {
+            edges.Remove(key);
+        }
+        var conceptIds = nodes.Values
+            .Where(node => node.Kind.Equals("Concept", StringComparison.OrdinalIgnoreCase))
+            .Select(node => node.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var conceptsByNode = edges.Values
+            .Where(edge => !edge.IsInferred && conceptIds.Contains(edge.TargetId))
+            .GroupBy(edge => edge.SourceId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(edge => edge.TargetId)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase),
+                StringComparer.OrdinalIgnoreCase);
+        var candidates = conceptsByNode.Keys
+            .Where(id => nodes.TryGetValue(id, out var node)
+                         && node.Kind is "Input" or "Document" or "Artifact" or "Goal" or "Knowledge")
+            .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
+            .Take(100)
+            .ToArray();
+        var created = 0;
+        for (var leftIndex = 0; leftIndex < candidates.Length && created < 120; leftIndex++)
+        {
+            for (var rightIndex = leftIndex + 1;
+                 rightIndex < candidates.Length && created < 120;
+                 rightIndex++)
+            {
+                var left = candidates[leftIndex];
+                var right = candidates[rightIndex];
+                if (rejectedPairs.Contains(PairKey(left, right))) continue;
+                var shared = conceptsByNode[left]
+                    .Intersect(conceptsByNode[right], StringComparer.OrdinalIgnoreCase)
+                    .Take(4)
+                    .ToArray();
+                if (shared.Length < 2) continue;
+                var labels = shared
+                    .Select(id => nodes.TryGetValue(id, out var concept) ? concept.Label : id)
+                    .ToArray();
+                var confidence = Math.Min(0.88, 0.48 + shared.Length * 0.1);
+                Link(
+                    edges,
+                    left,
+                    right,
+                    "potential mapping",
+                    0.7 + shared.Length * 0.08,
+                    true,
+                    confidence,
+                    "共享概念：" + string.Join("、", labels));
+                created++;
+            }
+        }
     }
 
     private static string EdgeKey(KnowledgeEdge edge)
         => $"{edge.SourceId}|{edge.TargetId}|{edge.Relation}";
+
+    private static string PairKey(string left, string right)
+        => string.Compare(left, right, StringComparison.OrdinalIgnoreCase) <= 0
+            ? $"{left}|{right}"
+            : $"{right}|{left}";
 
     private static string CreateId(string scope, string source)
     {

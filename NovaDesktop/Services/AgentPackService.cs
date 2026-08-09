@@ -322,6 +322,7 @@ public sealed class AgentPackService
             return string.Empty;
         }
 
+        var pack = FindPack(id);
         var details = Get(id);
         if (!details.Summary.Enabled)
         {
@@ -358,6 +359,10 @@ public sealed class AgentPackService
             builder.AppendLine();
         }
         AppendSection(builder, "DELIVERY CONTRACT", details.DeliveryTemplate);
+        AppendSection(
+            builder,
+            "STRUCTURED DELIVERY ENVELOPE",
+            ReadOptionalText(pack.Root, "delivery-contract.json", 12_000));
         builder.AppendLine("[PACK OPERATING RULES]");
         builder.AppendLine("- Preserve confirmed user facts, assumptions and unknowns as separate fields.");
         builder.AppendLine("- If required evidence is missing, ask the smallest useful question or return a conditional result; never invent values.");
@@ -430,6 +435,7 @@ public sealed class AgentPackService
             "nova.industry.json",
             "agent-card.json",
             "certification.json",
+            "delivery-contract.json",
             "INDUSTRY_CHARTER.md",
             "README.md"
         };

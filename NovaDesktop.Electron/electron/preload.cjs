@@ -8,22 +8,39 @@ contextBridge.exposeInMainWorld("nova", {
     listTasks: () => invoke("nova:list-tasks"),
     listArchivedTasks: () => invoke("nova:list-archived-tasks"),
     getTask: (request) => invoke("nova:get-task", request),
+    getTaskCapsule: (request) => invoke("nova:get-task-capsule", request),
+    getContextBudget: (request) => invoke("nova:get-context-budget", request),
     archiveTask: (request) => invoke("nova:archive-task", request),
     restoreTask: (request) => invoke("nova:restore-task", request),
     deleteArchivedTask: (request) => invoke("nova:delete-archived-task", request),
     readDeliveryArtifact: (request) => invoke("nova:read-delivery-artifact", request),
+    openDeliveryArtifact: (request) => invoke("nova:open-delivery-artifact", request),
+    revealDeliveryArtifact: (request) => invoke("nova:reveal-delivery-artifact", request),
+    submitDeliveryFeedback: (request) => invoke("nova:submit-delivery-feedback", request),
+    acceptDelivery: (request) => invoke("nova:accept-delivery", request),
     selectWorkspace: () => invoke("nova:select-workspace"),
     selectAttachments: () => invoke("nova:select-attachments"),
-    desktopSnapshot: () => invoke("nova:desktop-snapshot")
+    desktopSnapshot: () => invoke("nova:desktop-snapshot"),
+    onContextEvent: (listener) => {
+      const handler = (_event, payload) => listener(payload);
+      ipcRenderer.on("nova:context-event", handler);
+      return () => ipcRenderer.removeListener("nova:context-event", handler);
+    }
   },
   model: {
     configure: (configuration) => invoke("nova:configure-model", configuration),
     run: (request) => invoke("nova:run-model", request),
     cancel: (request) => invoke("nova:cancel-model", request),
+    resolveApproval: (request) => invoke("nova:resolve-tool-approval", request),
     onEvent: (listener) => {
       const handler = (_event, payload) => listener(payload);
       ipcRenderer.on("nova:agent-event", handler);
       return () => ipcRenderer.removeListener("nova:agent-event", handler);
+    },
+    onApprovalRequest: (listener) => {
+      const handler = (_event, payload) => listener(payload);
+      ipcRenderer.on("nova:tool-approval-request", handler);
+      return () => ipcRenderer.removeListener("nova:tool-approval-request", handler);
     }
   },
   capabilities: {
@@ -42,6 +59,7 @@ contextBridge.exposeInMainWorld("nova", {
     get: (request) => invoke("nova:get-agent-pack", request),
     listCreationTemplates: () => invoke("nova:list-agent-creation-templates"),
     recommend: (request) => invoke("nova:recommend-agent-pack", request),
+    prepare: (request) => invoke("nova:prepare-agent-pack", request),
     getDesignSession: () => invoke("nova:get-agent-workshop-session"),
     orchestrate: (request) => invoke("nova:orchestrate-agent-pack", request),
     cancelOrchestration: () => invoke("nova:cancel-agent-pack-orchestration"),
@@ -68,7 +86,19 @@ contextBridge.exposeInMainWorld("nova", {
     listProfiles: () => invoke("nova:list-extension-profiles"),
     saveSshProfile: (request) => invoke("nova:save-ssh-profile", request),
     testSshProfile: (request) => invoke("nova:test-ssh-profile", request),
-    saveCloudAdapter: (request) => invoke("nova:save-cloud-adapter", request)
+    saveCloudAdapter: (request) => invoke("nova:save-cloud-adapter", request),
+    getGateway: () => invoke("nova:get-extension-gateway"),
+    setGatewayEnabled: (request) => invoke("nova:set-extension-gateway-enabled", request),
+    rotateGatewayToken: () => invoke("nova:rotate-extension-gateway-token"),
+    copyGatewayToken: () => invoke("nova:copy-extension-gateway-token"),
+    copyGatewayUrl: () => invoke("nova:copy-extension-gateway-url"),
+    listGatewayActionRequests: () => invoke("nova:list-gateway-action-requests"),
+    resolveGatewayActionRequest: (request) => invoke("nova:resolve-gateway-action-request", request),
+    onGatewayActionRequest: (listener) => {
+      const handler = (_event, payload) => listener(payload);
+      ipcRenderer.on("nova:gateway-action-request", handler);
+      return () => ipcRenderer.removeListener("nova:gateway-action-request", handler);
+    }
   },
   growth: {
     getState: () => invoke("nova:get-living-memory"),
@@ -90,9 +120,12 @@ contextBridge.exposeInMainWorld("nova", {
     }
   },
   knowledge: {
+    openWindow: (request) => invoke("nova:open-knowledge-window", request),
     getState: (request) => invoke("nova:get-knowledge-state", request),
     indexWorkspace: (request) => invoke("nova:index-workspace-knowledge", request),
-    search: (request) => invoke("nova:search-workspace-knowledge", request)
+    search: (request) => invoke("nova:search-workspace-knowledge", request),
+    deleteNode: (request) => invoke("nova:delete-knowledge-node", request),
+    reviewMapping: (request) => invoke("nova:review-knowledge-mapping", request)
   },
   window: {
     minimize: () => invoke("nova:window-minimize"),

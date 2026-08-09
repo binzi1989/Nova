@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "servers": [
+    {
+      "name": "nova-maimai",
+      "transport": "stdio",
+      "command": "Nova.Maimai.Connector.exe",
+      "arguments": ["mcp"],
+      "workingDirectory": null,
+      "enabled": true,
+      "environmentVariables": {}
+    }
+  ]
+}

@@ -6,12 +6,12 @@ using b2xtranslator.txt;
 
 namespace NovaDesktop.Services;
 
-internal sealed record ExtractedDocumentText(
+public sealed record ExtractedDocumentText(
     string Text,
     string Format,
     int? PageCount = null);
 
-internal static class DocumentAttachmentTextExtractor
+public static class DocumentAttachmentTextExtractor
 {
     public static Task<ExtractedDocumentText> ExtractAsync(
         string path,

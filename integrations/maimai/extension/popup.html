@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NOVA 脉脉安全采集</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div class="brand">NOVA</div>
+    <div>
+      <h1>保存当前可见档案</h1>
+      <p>不读取 Cookie，不自动翻页，不自动联系</p>
+    </div>
+  </header>
+
+  <main>
+    <div id="status" class="status neutral">正在检查页面与本地连接器…</div>
+    <button id="scan" class="secondary" type="button">重新读取当前页面</button>
+
+    <form id="profileForm">
+      <div class="grid">
+        <label>姓名 / 展示名<input id="displayName" maxlength="100" required></label>
+        <label>当前职位<input id="currentTitle" maxlength="160"></label>
+        <label>当前公司<input id="currentCompany" maxlength="160"></label>
+        <label>地区<input id="location" maxlength="100"></label>
+      </div>
+      <label id="summaryLabel">公开简介<textarea id="publicSummary" rows="3" maxlength="2000"></textarea></label>
+      <label>可见技能（用逗号分隔）<input id="visibleSkills" maxlength="800"></label>
+      <label>保存目的<input id="purpose" maxlength="120" value="经本人主动筛选的商务人才研究" required></label>
+      <div class="grid compact">
+        <label>保留期限
+          <select id="retentionDays">
+            <option value="30">30 天</option>
+            <option value="90" selected>90 天</option>
+            <option value="180">180 天</option>
+            <option value="365">365 天</option>
+          </select>
+        </label>
+        <label>人工备注<input id="notes" maxlength="1000" placeholder="可选"></label>
+      </div>
+      <label class="consent">
+        <input id="confirm" type="checkbox" required>
+        <span>我确认只保存当前页面可见的职业信息，并按上述目的使用。</span>
+      </label>
+      <button id="save" class="primary" type="submit" disabled>保存到 NOVA 加密仓</button>
+    </form>
+  </main>
+
+  <footer>扩展 ID：nplhnfcoijedjoihpghfhnjkkgomhhpg</footer>
+  <script src="popup.js"></script>
+</body>
+</html>

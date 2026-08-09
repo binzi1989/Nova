@@ -13,6 +13,7 @@ public sealed class AgentOsKernel
     private readonly string _root;
     private readonly string _statePath;
     private readonly string _eventLedgerPath;
+    private readonly string _eventLedgerLockPath;
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         WriteIndented = true
@@ -34,6 +35,7 @@ public sealed class AgentOsKernel
             "agent-os");
         _statePath = Path.Combine(_root, "kernel-state.json");
         _eventLedgerPath = Path.Combine(_root, "execution-events.jsonl");
+        _eventLedgerLockPath = Path.Combine(_root, "execution-events.lock");
     }
 
     public string Root => _root;
@@ -388,7 +390,11 @@ public sealed class AgentOsKernel
         var restored = new List<AgentOsEventRecord>();
         try
         {
-            foreach (var line in File.ReadLines(_eventLedgerPath))
+            // The ledger can contain thousands of streaming/runtime events. Boot
+            // only needs a bounded recent suffix because kernel-state.json already
+            // carries the committed sequence and in-memory tail. Replaying the
+            // whole file made startup slower on every run and amplified lock races.
+            foreach (var line in ReadLedgerTailLines(_eventLedgerPath, 2 * 1024 * 1024, 4000))
             {
                 if (string.IsNullOrWhiteSpace(line))
                 {
@@ -410,7 +416,8 @@ public sealed class AgentOsKernel
                 }
             }
         }
-        catch (IOException)
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
         {
             return;
         }
@@ -429,6 +436,44 @@ public sealed class AgentOsKernel
         }
     }
 
+    private static IReadOnlyList<string> ReadLedgerTailLines(
+        string path,
+        int maximumBytes,
+        int maximumLines)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            4096,
+            FileOptions.SequentialScan);
+        var start = Math.Max(0, stream.Length - Math.Max(4096, maximumBytes));
+        stream.Seek(start, SeekOrigin.Begin);
+        using var reader = new StreamReader(
+            stream,
+            System.Text.Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: true,
+            bufferSize: 4096,
+            leaveOpen: false);
+        if (start > 0)
+        {
+            _ = reader.ReadLine();
+        }
+
+        var lines = new Queue<string>(Math.Max(1, maximumLines));
+        string? line;
+        while ((line = reader.ReadLine()) is not null)
+        {
+            if (lines.Count >= maximumLines)
+            {
+                lines.Dequeue();
+            }
+            lines.Enqueue(line);
+        }
+        return lines.ToArray();
+    }
+
     private async Task AppendLedgerRecordAsync(
         AgentOsEventRecord record,
         CancellationToken cancellationToken)
@@ -437,16 +482,46 @@ public sealed class AgentOsKernel
         var payload = JsonSerializer.Serialize(record, _ledgerJsonOptions)
                       + Environment.NewLine;
         var bytes = System.Text.Encoding.UTF8.GetBytes(payload);
+        await using var ledgerLease = await AcquireLedgerLeaseAsync(cancellationToken);
         await using var stream = new FileStream(
             _eventLedgerPath,
             FileMode.Append,
             FileAccess.Write,
-            FileShare.Read,
+            FileShare.ReadWrite | FileShare.Delete,
             4096,
             FileOptions.Asynchronous | FileOptions.WriteThrough);
         await stream.WriteAsync(bytes, cancellationToken);
         await stream.FlushAsync(cancellationToken);
         stream.Flush(flushToDisk: true);
+    }
+
+    private async Task<FileStream> AcquireLedgerLeaseAsync(
+        CancellationToken cancellationToken)
+    {
+        var startedAt = DateTimeOffset.UtcNow;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return new FileStream(
+                    _eventLedgerLockPath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    1,
+                    // Keep a stable zero-byte lock file. DeleteOnClose requires
+                    // DELETE_CHILD permission on Windows and was rejected in
+                    // otherwise writable LocalAppData installations.
+                    FileOptions.Asynchronous);
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException
+                && DateTimeOffset.UtcNow - startedAt < TimeSpan.FromSeconds(8))
+            {
+                await Task.Delay(30, cancellationToken);
+            }
+        }
     }
 
     private async Task PersistAsync(CancellationToken cancellationToken)

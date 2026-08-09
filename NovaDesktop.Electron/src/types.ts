@@ -30,11 +30,40 @@ export interface CrossModelVerification {
 }
 
 export interface DeliveryProof {
+  schemaVersion: "1.0";
+  deliveryId: string;
+  revision: number;
   status: "PROVEN" | "EVIDENCED" | "READY" | "PARTIAL";
+  title?: string;
+  outcome?: string;
   summary: string;
   requiresWorkspaceMutation: boolean;
   hasWorkspaceChanges: boolean;
   validationRuns: number;
+  artifacts: DeliveryArtifact[];
+  evidence: string[];
+  incomplete: string[];
+  nextActions: string[];
+  agentPackId?: string | null;
+  reviewState: "unreviewed" | "accepted" | "changes-requested";
+  outputFormat?: {
+    contract: "nova.delivery/1.0";
+    sections: string[];
+    artifactManifestRequired: boolean;
+  };
+}
+
+export interface DeliveryArtifact {
+  id: string;
+  title: string;
+  path: string;
+  relativePath: string;
+  kind: "image" | "pdf" | "word" | "spreadsheet" | "presentation" | "document" | "file";
+  mediaType: string;
+  size: number;
+  modifiedAt: string;
+  role: "primary" | "supporting" | "evidence";
+  previewable: boolean;
 }
 
 export interface DeliveryArtifactPreview {
@@ -42,7 +71,7 @@ export interface DeliveryArtifactPreview {
   name: string;
   size: number;
   truncated: boolean;
-  kind: "markdown" | "text";
+  kind: "markdown" | "text" | "image" | "document" | "external";
   language: string;
   content: string;
 }
@@ -172,6 +201,21 @@ export interface AgentWorkshopRecommendation {
   recommendedInputs: string[];
   starterPrompts: string[];
   designSignals: string[];
+}
+
+export interface AgentFoundryBrief {
+  name: string;
+  category: string;
+  description: string;
+  objective: string;
+  scenarioProfile: string;
+  autonomyLevel: string;
+  lifecycle: string;
+  collaborationMode: string;
+  deliveryMode: string;
+  decisionStyle: string;
+  primaryArtifact: string;
+  understanding: string;
 }
 
 export interface AgentWorkshopRoleDraft {
@@ -507,6 +551,65 @@ export interface KnowledgeDocument {
   indexedAt: string;
 }
 
+export interface KnowledgeGraphNode {
+  id: string;
+  label: string;
+  kind: string;
+  detail: string;
+  weight: number;
+  isManual?: boolean;
+  sourceType?: string;
+  sourceId?: string;
+  sourceLabel?: string;
+  isDeletable?: boolean;
+  updatedAt: string;
+}
+
+export interface KnowledgeGraphEdge {
+  sourceId: string;
+  targetId: string;
+  relation: string;
+  weight: number;
+  isInferred?: boolean;
+  confidence?: number;
+  evidence?: string;
+  reviewState?: "evidence" | "suggested" | "accepted" | "rejected";
+}
+
+export interface KnowledgeWikiPage {
+  id: string;
+  title: string;
+  entityType: string;
+  summary: string;
+  confirmedFacts: string[];
+  possibleConnections: string[];
+  sourceLabels: string[];
+  pagePath: string;
+  updatedAt: string;
+}
+
+export interface KnowledgeRuleResult {
+  ruleId: string;
+  title: string;
+  status: "triggered" | "clear";
+  severity: "info" | "warning" | "success" | string;
+  explanation: string;
+  evidence: string[];
+  recommendation: string;
+}
+
+export interface KnowledgeOperatingSystemState {
+  schemaVersion: string;
+  compiledAt: string;
+  scope: string;
+  wikiRoot: string;
+  entityTypes: Array<{ id: string; label: string; description: string; properties: string[] }>;
+  relationTypes: Array<{ id: string; label: string; sourceType: string; targetType: string; allowsInference: boolean }>;
+  wikiPages: KnowledgeWikiPage[];
+  rules: Array<{ id: string; title: string; description: string; severity: string; recommendation: string }>;
+  decisions: KnowledgeRuleResult[];
+}
+
 export interface KnowledgeState {
   workspaceRoot: string | null;
   indexPath: string;
@@ -515,19 +618,19 @@ export interface KnowledgeState {
   chunks: number;
   bytes: number;
   documents: KnowledgeDocument[];
+  knowledgeOs: KnowledgeOperatingSystemState;
   graph: {
     graphPath: string;
     updatedAt: string;
     nodeCount: number;
     edgeCount: number;
-    nodes: Array<{
-      id: string;
-      label: string;
-      kind: string;
-      detail: string;
-      weight: number;
-      updatedAt: string;
-    }>;
+    totalNodeCount: number;
+    totalEdgeCount: number;
+    inputCount: number;
+    inferredEdgeCount: number;
+    nodes: KnowledgeGraphNode[];
+    edges: KnowledgeGraphEdge[];
+    spaces: Array<{ id: string; label: string }>;
   };
 }
 
@@ -554,6 +657,107 @@ export interface BootInfo {
   defaults: Record<Provider, { model: string; endpoint: string }>;
 }
 
+export interface ExtensionGatewayState {
+  enabled: boolean;
+  running: boolean;
+  host: "127.0.0.1";
+  port: number;
+  baseUrl: string;
+  eventsUrl: string;
+  startedAt: string | null;
+  hooks: string[];
+  permissions: string[];
+  localOnly: true;
+  pendingActionRequests: number;
+  token?: string;
+}
+
+export interface GatewayActionRequest {
+  id: string;
+  title: string;
+  prompt: string;
+  executionMode: Exclude<ExecutionMode, "Autopilot">;
+  agentPackId: string | null;
+  source: string;
+  origin: string;
+  status: "pending" | "accepted" | "rejected";
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+export interface TaskCapsuleLayer {
+  id: string;
+  label: string;
+  sourceCharacters: number;
+  includedCharacters: number;
+  sourceCount: number;
+  reason: string;
+}
+
+export interface TaskCapsuleSelection {
+  relativePath: string;
+  score: number;
+  reasons: string[];
+  startLine: number;
+  endLine: number;
+  includedCharacters: number;
+}
+
+export interface TaskCapsuleView {
+  status?: "not-compiled";
+  detail?: string;
+  schema?: string;
+  taskId?: string;
+  goal?: string;
+  executionMode?: string;
+  characterBudget?: number;
+  usedCharacters?: number;
+  estimatedPromptTokens?: number;
+  estimatedRawCharacters?: number;
+  estimatedCharactersAvoided?: number;
+  estimatedTokensAvoided?: number;
+  fingerprint?: string;
+  contextCacheHit?: boolean;
+  contextSourceFingerprint?: string;
+  layers?: TaskCapsuleLayer[];
+  selections?: TaskCapsuleSelection[];
+  exclusions?: string[];
+  compiledAt?: string | null;
+}
+
+export interface ContextBudgetView {
+  policy: {
+    mode: string;
+    characterBudget: number;
+    workspaceCharacterBudget: number;
+    estimatedTokenBudget: number;
+    inputCharacters: number;
+    estimatedInputTokens: number;
+    strategy: string;
+  };
+  capsule?: TaskCapsuleView | null;
+}
+
+export interface ContextEvent {
+  taskId: string;
+  kind: "capsule-compiled" | "capsule-degraded";
+  detail?: string;
+  cacheHit?: boolean;
+  usedCharacters?: number;
+  characterBudget?: number;
+  selectedFiles?: number;
+}
+
+export interface ToolApprovalRequestEvent {
+  id: string;
+  taskId: string;
+  toolName: string;
+  title: string;
+  description: string;
+  preview: string;
+  scope: "workspace" | "desktop" | "external";
+}
+
 export interface NovaApi {
   system: {
     boot(): Promise<BootInfo>;
@@ -561,7 +765,13 @@ export interface NovaApi {
     listArchivedTasks(): Promise<AgentTask[] | { tasks: AgentTask[] }>;
     getTask(request: {
       taskId: string;
-    }): Promise<{ task: AgentTask; messages: Message[] }>;
+    }): Promise<{ task: AgentTask; messages: Message[]; delivery?: DeliveryProof | null }>;
+    getTaskCapsule(request: { taskId: string }): Promise<TaskCapsuleView>;
+    getContextBudget(request: {
+      mode: ExecutionMode;
+      characters?: number;
+      taskId?: string | null;
+    }): Promise<ContextBudgetView>;
     archiveTask(request: { taskId: string }): Promise<{ archived: boolean }>;
     restoreTask(request: { taskId: string }): Promise<{ archived: boolean }>;
     deleteArchivedTask(request: {
@@ -571,9 +781,21 @@ export interface NovaApi {
       path: string;
       workspace: string | null;
     }): Promise<DeliveryArtifactPreview>;
+    openDeliveryArtifact(request: { path: string; workspace: string | null }): Promise<{ opened: boolean }>;
+    revealDeliveryArtifact(request: { path: string; workspace: string | null }): Promise<{ revealed: boolean }>;
+    submitDeliveryFeedback(request: {
+      taskId: string;
+      scope: "delivery" | "artifact";
+      category: string;
+      note: string;
+      artifactId?: string | null;
+      calibrateAgent: boolean;
+    }): Promise<DeliveryProof>;
+    acceptDelivery(request: { taskId: string }): Promise<DeliveryProof>;
     selectWorkspace(): Promise<string | null>;
     selectAttachments(): Promise<Attachment[]>;
     desktopSnapshot(): Promise<DesktopSnapshot>;
+    onContextEvent(listener: (event: ContextEvent) => void): () => void;
   };
   model: {
     configure(configuration: {
@@ -609,7 +831,13 @@ export interface NovaApi {
       delivery?: DeliveryProof | null;
     }>;
     cancel(request: { runId: string }): Promise<{ cancelled: boolean }>;
+    resolveApproval(request: {
+      approvalId: string;
+      approved: boolean;
+      rememberForTask: boolean;
+    }): Promise<{ resolved: boolean; approved?: boolean; expired?: boolean }>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
+    onApprovalRequest(listener: (event: ToolApprovalRequestEvent) => void): () => void;
   };
   capabilities: {
     list(request: { workspace: string | null }): Promise<CapabilityState>;
@@ -636,6 +864,11 @@ export interface NovaApi {
     get(request: { id: string }): Promise<AgentPackDetails>;
     listCreationTemplates(): Promise<AgentCreationTemplate[]>;
     recommend(request: AgentPackCreationRequest): Promise<AgentWorkshopRecommendation>;
+    prepare(request: {
+      goal: string;
+      provider: Provider;
+      model: string;
+    }): Promise<AgentFoundryBrief>;
     getDesignSession(): Promise<AgentWorkshopDesignSession | null>;
     orchestrate(request: Omit<AgentPackCreationRequest, "requiredInputs" | "recommendedInputs" | "starterPrompts" | "orchestration"> & {
       provider: Provider;
@@ -672,10 +905,25 @@ export interface NovaApi {
     remove(request: { id: string }): Promise<{ canceled: boolean; removed: boolean; id?: string }>;
   };
   extensions: {
-    listProfiles(): Promise<{ ssh: unknown[]; cloud: unknown[] }>;
+    listProfiles(): Promise<{
+      ssh: unknown[];
+      cloud: unknown[];
+      gateway?: { enabled: boolean };
+    }>;
     saveSshProfile(request: Record<string, FormDataEntryValue>): Promise<unknown>;
     testSshProfile(request: Record<string, FormDataEntryValue>): Promise<{ reachable: boolean }>;
     saveCloudAdapter(request: Record<string, FormDataEntryValue>): Promise<unknown>;
+    getGateway(): Promise<ExtensionGatewayState>;
+    setGatewayEnabled(request: { enabled: boolean }): Promise<ExtensionGatewayState>;
+    rotateGatewayToken(): Promise<ExtensionGatewayState>;
+    copyGatewayToken(): Promise<{ copied: boolean }>;
+    copyGatewayUrl(): Promise<{ copied: boolean }>;
+    listGatewayActionRequests(): Promise<GatewayActionRequest[]>;
+    resolveGatewayActionRequest(request: {
+      id: string;
+      status: "accepted" | "rejected";
+    }): Promise<GatewayActionRequest>;
+    onGatewayActionRequest(listener: (request: GatewayActionRequest) => void): () => void;
   };
   growth: {
     getState(): Promise<LivingMemoryState>;
@@ -706,6 +954,7 @@ export interface NovaApi {
     onEvolutionEvent(listener: (event: EvolutionDiscoveryEvent) => void): () => void;
   };
   knowledge: {
+    openWindow(request: { workspace: string | null }): Promise<{ opened: boolean }>;
     getState(request: { workspace: string | null }): Promise<KnowledgeState>;
     indexWorkspace(request: { workspace: string }): Promise<{
       summary: {
@@ -725,6 +974,15 @@ export interface NovaApi {
       query: string;
       maximumResults?: number;
     }): Promise<{ query: string; workspaceRoot: string | null; results: KnowledgeSearchResult[] }>;
+    deleteNode(request: {
+      nodeId: string;
+      label: string;
+    }): Promise<{ deleted: boolean; canceled?: boolean }>;
+    reviewMapping(request: {
+      sourceId: string;
+      targetId: string;
+      accepted: boolean;
+    }): Promise<{ reviewed: boolean; accepted: boolean; edge: KnowledgeGraphEdge }>;
   };
   window: {
     minimize(): Promise<void>;

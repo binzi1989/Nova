@@ -58,6 +58,15 @@ function call(method, params = {}, timeoutMs = 10000) {
 try {
   console.log("SMOKE_STEP boot");
   await call("boot");
+  console.log("SMOKE_STEP expired_tool_approval");
+  const expiredApproval = await call("resolve_tool_approval", {
+    approvalId: "smoke-expired-approval",
+    approved: true,
+    rememberForTask: true
+  });
+  if (expiredApproval?.resolved !== false || expiredApproval?.expired !== true) {
+    throw new Error("Expired tool approval requests are not handled idempotently.");
+  }
   console.log("SMOKE_STEP cancel_idle_design_session");
   const idleDesignCancellation = await call("cancel_design_session", {
     sessionId: "smoke-idle-design"
@@ -182,6 +191,37 @@ try {
     mode: "Build",
     agentPackId: commercePack.id
   });
+  console.log("SMOKE_STEP context_budget");
+  const contextBudget = await call("get_context_budget", {
+    mode: "Build",
+    characters: 3000
+  });
+  if (
+    contextBudget.schema !== "nova.context-budget/1.0" ||
+    contextBudget.policy?.characterBudget < 30000 ||
+    contextBudget.policy?.estimatedInputTokens !== 1000
+  ) {
+    throw new Error("Smart Context Governor budget contract is incomplete.");
+  }
+  console.log("SMOKE_STEP compile_task_capsule");
+  const compiledCapsule = await call("compile_task_capsule", {
+    taskId: started.id,
+    prompt: "验证 Task Capsule 能够选择与 Electron Bridge 相关的高信号文件"
+  }, 30000);
+  if (
+    compiledCapsule.schema !== "nova.task-capsule/1.0" ||
+    compiledCapsule.usedCharacters <= 0 ||
+    compiledCapsule.usedCharacters > compiledCapsule.characterBudget ||
+    !Array.isArray(compiledCapsule.layers) ||
+    !Array.isArray(compiledCapsule.selections) ||
+    Object.hasOwn(compiledCapsule, "runtimeContext")
+  ) {
+    throw new Error("Task Capsule compilation or redaction contract is incomplete.");
+  }
+  const recoveredCapsule = await call("get_task_capsule", { taskId: started.id });
+  if (recoveredCapsule.fingerprint !== compiledCapsule.fingerprint) {
+    throw new Error("Task Capsule did not persist for later inspection.");
+  }
   console.log(`SMOKE_STEP task_event ${started.id}`);
   await call("task_event", {
     taskId: started.id,
@@ -196,7 +236,24 @@ try {
     succeeded: true,
     detail: "Electron Bridge 端到端验证通过",
     outputCharacters: 1800,
-    draft: "NOVA_ELECTRON_BRIDGE_E2E_OK"
+    draft: "NOVA_ELECTRON_BRIDGE_E2E_OK",
+    delivery: {
+      schemaVersion: "1.0",
+      status: "EVIDENCED",
+      summary: "端到端交付契约验证通过",
+      artifacts: [{
+        id: "artifact-smoke",
+        title: "冒烟测试脚本",
+        path: path.resolve(scriptDirectory, "smoke-bridge.mjs"),
+        relativePath: "scripts/smoke-bridge.mjs",
+        kind: "document",
+        size: 1,
+        role: "evidence"
+      }],
+      evidence: ["Bridge 已完成任务提交"],
+      incomplete: [],
+      nextActions: ["人工审查"]
+    }
   });
   if (String(completed.state).toLowerCase() !== "completed") {
     throw new Error(`Unexpected final state: ${completed.state}`);
@@ -208,6 +265,21 @@ try {
   }
   if (recovered.task?.agentPackId !== commercePack.id) {
     throw new Error("Recovered task lost its selected Agent Pack.");
+  }
+  if (recovered.delivery?.schemaVersion !== "1.0" || recovered.delivery?.artifacts?.length !== 1) {
+    throw new Error("Recovered task lost its structured delivery contract.");
+  }
+  console.log("SMOKE_STEP delivery_feedback");
+  const feedback = await call("submit_delivery_feedback", {
+    taskId: completed.id,
+    scope: "artifact",
+    category: "quality",
+    note: "补充一条可复验的证据。",
+    artifactId: "artifact-smoke",
+    calibrateAgent: false
+  });
+  if (feedback.reviewState !== "changes-requested" || feedback.feedback?.length !== 1) {
+    throw new Error("Delivery feedback was not persisted.");
   }
   console.log("SMOKE_STEP partial_delivery");
   const partialTask = await call("start_task", {
@@ -257,9 +329,12 @@ try {
   if (
     !Array.isArray(knowledgeState.documents) ||
     typeof knowledgeState.chunks !== "number" ||
-    !Array.isArray(knowledgeState.graph?.nodes)
+    !Array.isArray(knowledgeState.graph?.nodes) ||
+    knowledgeState.knowledgeOs?.schemaVersion !== "nova.knowledge-os/1.0" ||
+    !Array.isArray(knowledgeState.knowledgeOs?.wikiPages) ||
+    !Array.isArray(knowledgeState.knowledgeOs?.decisions)
   ) {
-    throw new Error("Knowledge dock state is not renderer-compatible.");
+    throw new Error("Knowledge OS state is not renderer-compatible.");
   }
   const knowledgeSearch = await call("search_workspace_knowledge", {
     workspaceRoot: knowledgeWorkspace,

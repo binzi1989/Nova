@@ -29,7 +29,11 @@ public sealed record AdaptiveContextPack(
     IReadOnlyList<string> SearchTerms,
     IReadOnlyList<AdaptiveContextSelection> Selections,
     DateTimeOffset CompiledAt,
-    string ArtifactPath);
+    string ArtifactPath)
+{
+    public string SourceFingerprint { get; init; } = string.Empty;
+    public bool CacheHit { get; init; }
+}
 
 public sealed class AdaptiveContextCompilerService
 {
@@ -125,6 +129,35 @@ public sealed class AdaptiveContextCompilerService
         EngineeringWorkspaceSnapshot snapshot,
         int characterBudget = DefaultCharacterBudget,
         CancellationToken cancellationToken = default)
+        => await CompileCoreAsync(
+            taskId,
+            workspaceRoot,
+            goal,
+            snapshot.ChangedFiles,
+            characterBudget,
+            cancellationToken);
+
+    public async Task<AdaptiveContextPack> CompileWorkspaceAsync(
+        string taskId,
+        string workspaceRoot,
+        string goal,
+        int characterBudget = DefaultCharacterBudget,
+        CancellationToken cancellationToken = default)
+        => await CompileCoreAsync(
+            taskId,
+            workspaceRoot,
+            goal,
+            [],
+            characterBudget,
+            cancellationToken);
+
+    private async Task<AdaptiveContextPack> CompileCoreAsync(
+        string taskId,
+        string workspaceRoot,
+        string goal,
+        IReadOnlyList<EngineeringChangedFile> changedFiles,
+        int characterBudget,
+        CancellationToken cancellationToken)
     {
         var startedAt = Stopwatch.GetTimestamp();
         var root = Path.GetFullPath(workspaceRoot);
@@ -134,7 +167,7 @@ public sealed class AdaptiveContextCompilerService
         }
         characterBudget = Math.Clamp(characterBudget, 4000, 40_000);
         var terms = ExtractSearchTerms(goal);
-        var changedPaths = snapshot.ChangedFiles
+        var changedPaths = changedFiles
             .Select(item => NormalizePath(item.Path))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var candidates = EnumerateCandidates(root)
@@ -143,6 +176,40 @@ public sealed class AdaptiveContextCompilerService
             .OrderByDescending(item => item.PathScore)
             .ThenBy(item => item.RelativePath, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+        var sourceFingerprint = ComputeSourceFingerprint(
+            root,
+            terms,
+            characterBudget,
+            candidates);
+        var sharedArtifactPath = Path.Combine(
+            _storageRoot,
+            $"shared-{sourceFingerprint}.json");
+        var cached = await LoadAsync(sharedArtifactPath, cancellationToken);
+        if (cached is not null
+            && string.Equals(
+                cached.SourceFingerprint,
+                sourceFingerprint,
+                StringComparison.OrdinalIgnoreCase)
+            && cached.CharacterBudget == characterBudget)
+        {
+            var taskArtifactPath = Path.Combine(
+                _storageRoot,
+                $"{SafeName(taskId)}-{cached.Fingerprint[..12]}.json");
+            var reused = cached with
+            {
+                TaskId = taskId,
+                WorkspaceRoot = root,
+                Goal = goal.Trim()[..Math.Min(goal.Trim().Length, 6000)],
+                CompileDuration = Stopwatch.GetElapsedTime(startedAt),
+                CompiledAt = DateTimeOffset.Now,
+                ArtifactPath = taskArtifactPath,
+                SourceFingerprint = sourceFingerprint,
+                CacheHit = true
+            };
+            await SaveAsync(reused, cancellationToken);
+            return reused;
+        }
 
         var scored = new List<ScoredFile>();
         var scannedFiles = 0;
@@ -265,7 +332,17 @@ public sealed class AdaptiveContextCompilerService
             terms,
             selections,
             DateTimeOffset.Now,
-            artifactPath);
+            artifactPath)
+        {
+            SourceFingerprint = sourceFingerprint,
+            CacheHit = false
+        };
+        var sharedPack = pack with
+        {
+            TaskId = "shared",
+            ArtifactPath = sharedArtifactPath
+        };
+        await SaveAsync(sharedPack, cancellationToken);
         await SaveAsync(pack, cancellationToken);
         return pack;
     }
@@ -309,6 +386,61 @@ public sealed class AdaptiveContextCompilerService
         {
             _writeLock.Release();
         }
+    }
+
+    private async Task<AdaptiveContextPack?> LoadAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        if (!File.Exists(path)) return null;
+        try
+        {
+            var json = await File.ReadAllTextAsync(path, cancellationToken);
+            return JsonSerializer.Deserialize<AdaptiveContextPack>(json, _jsonOptions);
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or UnauthorizedAccessException
+            or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string ComputeSourceFingerprint(
+        string root,
+        IReadOnlyList<string> terms,
+        int characterBudget,
+        IReadOnlyList<CandidateFile> candidates)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar));
+        builder.AppendLine(characterBudget.ToString());
+        builder.AppendLine(string.Join("\u001f", terms.OrderBy(value => value, StringComparer.OrdinalIgnoreCase)));
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                var file = new FileInfo(candidate.FullPath);
+                builder.Append(candidate.RelativePath)
+                    .Append('\u001f')
+                    .Append(file.Length)
+                    .Append('\u001f')
+                    .Append(file.LastWriteTimeUtc.Ticks)
+                    .AppendLine();
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                or UnauthorizedAccessException
+                or System.Security.SecurityException)
+            {
+                builder.Append(candidate.RelativePath)
+                    .AppendLine("\u001funavailable");
+            }
+        }
+        return Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString())))
+            .ToLowerInvariant();
     }
 
     private static CandidateFile BuildCandidate(

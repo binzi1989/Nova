@@ -1,0 +1,32 @@
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  color: #15202b;
+  background: #f5f7fb;
+}
+
+* { box-sizing: border-box; }
+body { width: 430px; margin: 0; }
+header { display: flex; gap: 12px; align-items: center; padding: 18px 20px; color: white; background: linear-gradient(135deg, #182848, #304f91); }
+.brand { display: grid; place-items: center; width: 46px; height: 46px; border: 1px solid #ffffff66; border-radius: 14px; font-size: 12px; font-weight: 800; letter-spacing: .08em; }
+h1 { margin: 0 0 3px; font-size: 18px; }
+header p { margin: 0; color: #dbe7ff; font-size: 12px; }
+main { padding: 16px 20px 18px; }
+.status { margin-bottom: 10px; padding: 10px 12px; border-radius: 9px; font-size: 12px; line-height: 1.5; }
+.neutral { background: #e9eef8; color: #3b4b66; }
+.good { background: #e4f7ed; color: #12643c; }
+.bad { background: #fff0ed; color: #9b2f20; }
+form { margin-top: 14px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.grid.compact { grid-template-columns: 120px 1fr; }
+label { display: block; margin-bottom: 10px; color: #46536a; font-size: 12px; }
+input, textarea, select { width: 100%; margin-top: 5px; padding: 8px 9px; border: 1px solid #ccd5e4; border-radius: 7px; background: white; color: #15202b; font: inherit; font-size: 13px; outline: none; }
+textarea { resize: vertical; }
+input:focus, textarea:focus, select:focus { border-color: #4d72cc; box-shadow: 0 0 0 3px #4d72cc18; }
+button { width: 100%; border: 0; border-radius: 8px; padding: 10px 12px; font-weight: 650; cursor: pointer; }
+.primary { color: white; background: #2f5fc7; }
+.primary:disabled { opacity: .45; cursor: default; }
+.secondary { color: #294574; background: #e9eef8; }
+.consent { display: flex; gap: 8px; align-items: flex-start; padding: 9px 10px; border: 1px solid #d9e1ee; border-radius: 8px; background: white; line-height: 1.5; }
+.consent input { width: auto; margin-top: 2px; }
+footer { padding: 9px 20px; border-top: 1px solid #e2e7f0; color: #7a8598; background: white; font-size: 10px; text-align: center; }

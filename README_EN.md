@@ -37,6 +37,22 @@
 > [!IMPORTANT]
 > The latest preview is `1.1.0-preview.15`. Installers are not yet signed and automatic updates remain disabled by default. Use [GitHub Releases](https://github.com/binzi1989/Nova/releases) as the source of public builds. NOVA has a complete product foundation, but it is still being validated on real tasks and across platforms. Passing local tests is not presented as GA readiness.
 
+## Product preview
+
+<p align="center">
+  <img src="docs/images/nova-home.png" alt="NOVA AgentOS desktop workspace" width="100%" />
+</p>
+
+<p align="center"><em>A lightweight desktop workspace that keeps tasks, context, agent mode, model access, and execution state in one place.</em></p>
+
+<details>
+  <summary><strong>See: create a professional Agent from one sentence</strong></summary>
+  <br />
+  <p align="center">
+    <img src="docs/images/nova-agent-creation.png" alt="Create a professional Agent in NOVA" width="100%" />
+  </p>
+</details>
+
 ## This preview
 
 - **A more reliable Agent Workshop:** every design agent's stage output is persisted. NOVA repairs incomplete structures locally first and makes at most one bounded model-repair request when the response cannot be parsed, avoiding another full-token run.
@@ -94,6 +110,16 @@ Most AI products optimize the conversation. NOVA optimizes the work lifecycle ar
 | **Delivery Workspace** | Reviews files, evidence, verification outcomes, and versioned artifacts without leaving NOVA |
 | **Extension Dock** | Connects models, MCP servers, Skills, knowledge sources, SSH, cloud environments, and components |
 | **Evolution Lab** | Distills repeated work patterns into reviewable, disableable plugins under an explicit switch and token budget |
+| **Knowledge OS** | Builds local Wiki pages, cited retrieval, relationship maps, mapping review, and rule decisions from task evidence |
+| **CLI & Extension Gateway** | Exposes governed local task, artifact, and event interfaces to scripts, dashboards, and microservices |
+
+## Create a professional Agent from one sentence
+
+Users do not need to design roles, prompts, workflows, or JSON first. A request such as:
+
+> Help the sales team organize leads, rank follow-up priority, and generate a daily action list.
+
+is enough for NOVA to identify the industry outcome, recommend the evidence users should prepare, ask the connected model to design roles and contracts, preserve a reviewable draft in the Workshop, and create a durable build task only after approval. The Workshop designs; Taskspace orchestrates and builds.
 
 ## Agent Packs: industry agents without another desktop app
 

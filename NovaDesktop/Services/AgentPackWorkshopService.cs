@@ -484,6 +484,8 @@ public sealed class AgentPackWorkshopService
             },
             outputContract = new
             {
+                schema = "nova.delivery/1.0",
+                declaration = "delivery-contract.json",
                 primaryArtifact = request.PrimaryArtifact,
                 mustPersist = true,
                 evidenceRequired = true,
@@ -582,8 +584,40 @@ public sealed class AgentPackWorkshopService
             verdict = "contract-simulated"
         };
 
+        // All specialist agents share NOVA's renderer-readable delivery envelope.
+        // Industry-specific behavior changes the artifacts, not the review format.
+        var deliveryContract = new
+        {
+            schema = "nova.delivery/1.0",
+            primaryArtifact = request.PrimaryArtifact,
+            requiredSections = new[] { "outcome", "artifacts", "evidence", "incomplete", "nextActions" },
+            artifactManifest = new
+            {
+                required = true,
+                source = "runtime-observed-files",
+                fields = new[] { "id", "title", "path", "relativePath", "kind", "size", "role", "modifiedAt" }
+            },
+            evidence = new
+            {
+                required = true,
+                proofOfDone = "proof-of-done.json",
+                distinguishFactsInferencesUnknowns = true
+            },
+            review = new
+            {
+                requiredBeforeFinalAcceptance = true,
+                scopes = new[] { "delivery", "artifact" },
+                actions = new[] { "accept", "request-changes", "calibrate-agent" },
+                repairInSameTask = true
+            },
+            emptyArtifactPolicy = request.DeliveryMode == "conversation"
+                ? "allow-explicit-conversation-delivery"
+                : "partial-not-complete"
+        };
+
         await WriteJsonAsync(Path.Combine(root, "nova.industry.json"), manifest, cancellationToken);
         await WriteJsonAsync(Path.Combine(root, "agent-card.json"), agentCard, cancellationToken);
+        await WriteJsonAsync(Path.Combine(root, "delivery-contract.json"), deliveryContract, cancellationToken);
         await WriteJsonAsync(Path.Combine(root, "workflows", "entry-workflow.json"), workflow, cancellationToken);
         await WriteJsonAsync(Path.Combine(root, "evaluations", "standard-cases.json"), evaluations, cancellationToken);
         await WriteJsonAsync(Path.Combine(root, "evaluations", "contract-dry-run.json"), contractDryRun, cancellationToken);
@@ -599,12 +633,13 @@ public sealed class AgentPackWorkshopService
         {
             "nova.industry.json", "agent-card.json", "INDUSTRY_CHARTER.md", "agents/AGENT_ROSTER.md",
             "workflows/entry-workflow.json", "delivery-templates/result.md", "evaluations/standard-cases.json",
-            "evaluations/contract-dry-run.json"
+            "evaluations/contract-dry-run.json", "delivery-contract.json"
         };
         var manifestText = File.ReadAllText(Path.Combine(root, "nova.industry.json"));
         var workflowText = File.ReadAllText(Path.Combine(root, "workflows", "entry-workflow.json"));
         var evaluationsText = File.ReadAllText(Path.Combine(root, "evaluations", "standard-cases.json"));
         var deliveryText = File.ReadAllText(Path.Combine(root, "delivery-templates", "result.md"));
+        var deliveryContractText = File.ReadAllText(Path.Combine(root, "delivery-contract.json"));
         using var manifestDocument = JsonDocument.Parse(manifestText);
         using var workflowDocument = JsonDocument.Parse(workflowText);
         using var evaluationsDocument = JsonDocument.Parse(evaluationsText);
@@ -660,6 +695,12 @@ public sealed class AgentPackWorkshopService
             new("delivery-contract", "交付内容可审阅", new[] { "## 结论", "## 已确认事实", "## 推断与判断", "## 未知项与风险", "## 交付物与验证" }.All(section => deliveryText.Contains(section, StringComparison.Ordinal)), "交付模板分离事实、判断、未知项和验证证据"),
             new("sandbox-dry-run", "沙箱契约演练", File.ReadAllText(Path.Combine(root, "evaluations", "contract-dry-run.json")).Contains("contract-simulated", StringComparison.Ordinal), "角色、步骤、产物与五类场景已完成无副作用契约演练")
         };
+        checks.Add(new AgentCertificationCheck(
+            "delivery-envelope",
+            "统一输出格式",
+            deliveryContractText.Contains("nova.delivery/1.0", StringComparison.Ordinal)
+            && deliveryContractText.Contains("runtime-observed-files", StringComparison.Ordinal),
+            "通用 NOVA 与自建 Agent 使用相同的交付物清单、证据、边界和反馈契约"));
         var score = (int)Math.Round(checks.Count(check => check.Passed) * 100d / checks.Count);
         var level = score == 100 ? "Runnable" : "Draft";
         return new AgentPackCertificationReport(

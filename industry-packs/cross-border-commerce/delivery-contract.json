@@ -1,0 +1,37 @@
+{
+  "schema": "nova.delivery/1.0",
+  "primaryArtifact": "跨境电商决策报告.md",
+  "requiredSections": [
+    "outcome",
+    "artifacts",
+    "evidence",
+    "incomplete",
+    "nextActions"
+  ],
+  "artifactManifest": {
+    "required": true,
+    "source": "runtime-observed-files",
+    "fields": [
+      "id",
+      "title",
+      "path",
+      "relativePath",
+      "kind",
+      "size",
+      "role",
+      "modifiedAt"
+    ]
+  },
+  "evidence": {
+    "required": true,
+    "proofOfDone": "proof-of-done.json",
+    "distinguishFactsInferencesUnknowns": true
+  },
+  "review": {
+    "requiredBeforeFinalAcceptance": true,
+    "scopes": ["delivery", "artifact"],
+    "actions": ["accept", "request-changes", "calibrate-agent"],
+    "repairInSameTask": true
+  },
+  "emptyArtifactPolicy": "partial-not-complete"
+}
