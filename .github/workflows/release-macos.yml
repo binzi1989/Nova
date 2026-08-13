@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing GitHub release tag
         required: true
-        default: v1.0.0
+        default: v1.1.0-preview.15
 
 permissions:
   contents: write
@@ -56,33 +56,186 @@ jobs:
             --self-contained true \
             -p:PublishSingleFile=false \
             --output NovaDesktop.Electron/resources/bridge
+          chmod +x NovaDesktop.Electron/resources/bridge/Nova.AgentOS.Bridge
           test -x NovaDesktop.Electron/resources/bridge/Nova.AgentOS.Bridge
 
-      - name: Package Electron application
-        working-directory: NovaDesktop.Electron
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: >-
-          npx electron-builder
-          --mac zip
-          --${{ matrix.arch }}
-          --config.directories.output=dist-electron-mac
+      - name: Smoke-test macOS AgentOS bridge
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
 
-      - name: Verify application payload
+          executable = "NovaDesktop.Electron/resources/bridge/Nova.AgentOS.Bridge"
+          process = subprocess.Popen(
+              [executable],
+              stdin=subprocess.PIPE,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.PIPE,
+              text=True,
+          )
+          try:
+              stdout, stderr = process.communicate(
+                  json.dumps({"id": "mac-smoke", "method": "boot", "params": {}}) + "\n",
+                  timeout=45,
+              )
+          except subprocess.TimeoutExpired:
+              process.kill()
+              stdout, stderr = process.communicate()
+              raise SystemExit(f"AgentOS bridge boot timed out. stderr={stderr}")
+
+          first_line = next((line for line in stdout.splitlines() if line.strip()), "")
+          if not first_line:
+              raise SystemExit(f"AgentOS bridge returned no response. stderr={stderr}")
+          response = json.loads(first_line)
+          if response.get("error") or not response.get("result"):
+              raise SystemExit(f"AgentOS bridge boot failed: {response}")
+          print("NOVA_MAC_BRIDGE_SMOKE_OK")
+          PY
+
+      - name: Package Electron application on macOS
+        working-directory: NovaDesktop.Electron
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          rm -rf dist-electron-mac
+          if [[ -z "${CSC_LINK:-}" ]]; then
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
+          npx electron-builder \
+            --mac dir \
+            --${{ matrix.arch }} \
+            --config.directories.output=dist-electron-mac
+
+      - name: Verify and finalize application signature
         working-directory: NovaDesktop.Electron
         shell: bash
         run: |
-          package="$(find dist-electron-mac -maxdepth 1 -name '*.zip' -print -quit)"
-          test -n "$package"
+          app="$(find dist-electron-mac -maxdepth 2 -type d -name 'NOVA AgentOS.app' -print -quit)"
+          test -n "$app"
+          chmod +x "$app/Contents/MacOS/NOVA AgentOS"
+          chmod +x "$app/Contents/Resources/bridge/Nova.AgentOS.Bridge"
+
+          if ! codesign --verify --deep --strict "$app" >/dev/null 2>&1; then
+            echo "No usable Developer ID signature was found; applying a complete ad-hoc signature."
+            codesign \
+              --force \
+              --deep \
+              --options runtime \
+              --entitlements build/entitlements.mac.plist \
+              --sign - \
+              "$app"
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv --verbose=4 "$app" 2>&1 | tee dist-electron-mac/codesign-${{ matrix.arch }}.txt
+          xattr -cr "$app"
+
+      - name: Notarize when Apple credentials are configured
+        working-directory: NovaDesktop.Electron
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          app="$(find dist-electron-mac -maxdepth 2 -type d -name 'NOVA AgentOS.app' -print -quit)"
+          if [[ -z "${APPLE_ID:-}" || -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" || -z "${APPLE_TEAM_ID:-}" ]]; then
+            echo "Apple notarization credentials are not configured; shipping a clearly labelled preview package."
+            echo "ad-hoc" > dist-electron-mac/signing-mode-${{ matrix.arch }}.txt
+            exit 0
+          fi
+
+          if ! codesign -dv --verbose=4 "$app" 2>&1 | grep -q "Developer ID Application"; then
+            echo "Notarization credentials exist, but the application has no Developer ID signature."
+            exit 1
+          fi
+
+          ditto -c -k --keepParent "$app" dist-electron-mac/notarization-${{ matrix.arch }}.zip
+          xcrun notarytool submit dist-electron-mac/notarization-${{ matrix.arch }}.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
+          rm -f dist-electron-mac/notarization-${{ matrix.arch }}.zip
+          echo "developer-id-notarized" > dist-electron-mac/signing-mode-${{ matrix.arch }}.txt
+
+      - name: Create user-facing ZIP and DMG
+        working-directory: NovaDesktop.Electron
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          app="$(find dist-electron-mac -maxdepth 2 -type d -name 'NOVA AgentOS.app' -print -quit)"
+          bundle="dist-electron-mac/NOVA-AgentOS-${version}-mac-${{ matrix.arch }}"
+          mkdir -p "$bundle"
+          ditto "$app" "$bundle/NOVA AgentOS.app"
+
+          cp ../docs/MACOS-INSTALL.md "$bundle/安装与故障排查.md"
+          cat > "$bundle/安装 NOVA.command" <<'SCRIPT'
+          #!/bin/zsh
+          set -euo pipefail
+          SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
+          SOURCE_APP="$SOURCE_DIR/NOVA AgentOS.app"
+          TARGET_APP="/Applications/NOVA AgentOS.app"
+
+          if [[ ! -d "$SOURCE_APP" ]]; then
+            echo "没有找到 NOVA AgentOS.app，请先完整解压安装包。"
+            read -r "?按回车键退出..."
+            exit 1
+          fi
+
+          echo "正在安装 NOVA AgentOS..."
+          xattr -cr "$SOURCE_APP" 2>/dev/null || true
+          rm -rf "$TARGET_APP"
+          ditto "$SOURCE_APP" "$TARGET_APP"
+          xattr -cr "$TARGET_APP" 2>/dev/null || true
+          chmod +x "$TARGET_APP/Contents/MacOS/NOVA AgentOS"
+          chmod +x "$TARGET_APP/Contents/Resources/bridge/Nova.AgentOS.Bridge"
+          open "$TARGET_APP"
+          echo "安装完成。NOVA 已复制到应用程序文件夹。"
+          SCRIPT
+          chmod +x "$bundle/安装 NOVA.command"
+
+          zip_path="dist-electron-mac/NOVA-AgentOS-${version}-mac-${{ matrix.arch }}.zip"
+          dmg_path="dist-electron-mac/NOVA-AgentOS-${version}-mac-${{ matrix.arch }}.dmg"
+          ditto -c -k --sequesterRsrc --keepParent "$bundle" "$zip_path"
+          hdiutil create \
+            -volname "NOVA AgentOS" \
+            -srcfolder "$bundle" \
+            -ov \
+            -format UDZO \
+            "$dmg_path"
+          shasum -a 256 "$zip_path" "$dmg_path" > "dist-electron-mac/SHA256-${{ matrix.arch }}.txt"
+
+      - name: Verify distributable payload
+        working-directory: NovaDesktop.Electron
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          package="dist-electron-mac/NOVA-AgentOS-${version}-mac-${{ matrix.arch }}.zip"
+          dmg="dist-electron-mac/NOVA-AgentOS-${version}-mac-${{ matrix.arch }}.dmg"
+          test -s "$package"
+          test -s "$dmg"
           unzip -Z1 "$package" | grep -q 'NOVA AgentOS.app/Contents/MacOS/NOVA AgentOS'
           unzip -Z1 "$package" | grep -q 'NOVA AgentOS.app/Contents/Resources/bridge/Nova.AgentOS.Bridge'
-          shasum -a 256 "$package"
+          unzip -Z1 "$package" | grep -q '安装 NOVA.command'
+          unzip -Z1 "$package" | grep -q '安装与故障排查.md'
+          shasum -a 256 -c "dist-electron-mac/SHA256-${{ matrix.arch }}.txt"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: NOVA-AgentOS-mac-${{ matrix.arch }}
-          path: NovaDesktop.Electron/dist-electron-mac/*.zip
+          path: |
+            NovaDesktop.Electron/dist-electron-mac/NOVA-AgentOS-*.zip
+            NovaDesktop.Electron/dist-electron-mac/NOVA-AgentOS-*.dmg
+            NovaDesktop.Electron/dist-electron-mac/SHA256-*.txt
+            NovaDesktop.Electron/dist-electron-mac/signing-mode-*.txt
+            NovaDesktop.Electron/dist-electron-mac/codesign-*.txt
           if-no-files-found: error
 
   publish:
@@ -102,4 +255,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release upload "${{ inputs.tag }}" release-assets/*.zip --clobber
+        run: gh release upload "${{ inputs.tag }}" release-assets/* --clobber

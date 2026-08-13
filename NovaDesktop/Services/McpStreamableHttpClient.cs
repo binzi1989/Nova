@@ -25,6 +25,8 @@ public sealed class McpStreamableHttpClient : IMcpClientSession
         _headers = headers;
     }
 
+    public bool IsAlive => true;
+
     public static async Task<McpStreamableHttpClient> ConnectAsync(
         McpServerRegistration server,
         HttpClient httpClient,

@@ -417,29 +417,31 @@ public sealed class AgentPackWorkshopService
         };
         foreach (var (input, index) in requiredInputs.Select((value, index) => (value, index)))
         {
-            var inputKind = LooksLikeAttachmentInput(input) ? "attachment" : "text";
             onboardingSteps.Add(new
             {
-                id = $"required-{index + 1}", title = input, description = "请提供当前掌握的信息或附件。",
-                kind = inputKind, required = true,
-                placeholder = inputKind == "attachment" ? $"选择文件：{input}" : $"填写或说明：{input}",
+                id = $"required-{index + 1}", title = input, description = "用一句话说明当前掌握的信息；相关文件可在统一入口一次上传。",
+                kind = "text", required = true,
+                placeholder = $"填写或说明：{input}",
                 options = Array.Empty<string>(),
                 whyItMatters = "这是形成可靠结果所需的核心输入。", example = $"如果暂时没有，请明确写‘未知’，Agent 会降低结论级别。"
             });
         }
-        if (recommendedInputs.Count > 0 && onboardingSteps.Count < 8)
+        var acceptsFiles = requiredInputs.Any(LooksLikeAttachmentInput) || recommendedInputs.Count > 0;
+        if (acceptsFiles && onboardingSteps.Count < 8)
         {
             onboardingSteps.Add(new
             {
-                id = "materials", title = "补充资料", description = string.Join("、", recommendedInputs),
+                id = "materials", title = "共同资料附件", description = recommendedInputs.Count > 0
+                    ? string.Join("、", recommendedInputs)
+                    : "与任务有关的图片、Word、PDF、表格或其他文件",
                 kind = "attachment", required = false, placeholder = "添加图片、文档或数据文件", options = Array.Empty<string>(),
-                whyItMatters = "补充材料越完整，Agent 的结论越能追溯和复核。", example = "可以先用现有资料开始，缺失内容会作为未知项保留。"
+                whyItMatters = "所有文件只需在统一入口上传一次，Agent 会在整条工作流中共同使用。", example = "可以先用现有资料开始，缺失内容会作为未知项保留。"
             });
         }
         var promptSegments = new List<string> { "目标：{{goal}}" };
         promptSegments.AddRange(requiredInputs.Select((input, index) =>
             $"{input}：{{{{required-{index + 1}}}}}"));
-        if (recommendedInputs.Count > 0)
+        if (acceptsFiles)
         {
             promptSegments.Add("补充资料：{{materials}}");
         }

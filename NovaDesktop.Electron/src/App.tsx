@@ -80,7 +80,8 @@ import type {
   StoreCapabilityItem,
   ContextEvent,
   TaskCapsuleView,
-  ToolApprovalRequestEvent
+  ToolApprovalRequestEvent,
+  WorkspacePermissionGrant
 } from "./types";
 
 type SettingsSection =
@@ -93,10 +94,18 @@ type SettingsSection =
   | "ssh"
   | "cloud"
   | "plugins"
-  | "growth";
+  | "growth"
+  | "permissions";
 type PendingSubmission = {
   content: string;
   attachments: Attachment[];
+};
+type RuntimeInteractionKind = "progress" | "supplement" | "correction" | "stop";
+type RuntimeChange = PendingSubmission & {
+  id: string;
+  taskId: string;
+  kind: Exclude<RuntimeInteractionKind, "progress" | "stop">;
+  queuedAt: string;
 };
 type ApprovalMode = "workspace" | "workspaceDesktop" | "readOnly";
 type PlanStep = {
@@ -107,6 +116,116 @@ type PlanStep = {
   status: "pending" | "running" | "done" | "failed";
   output?: string;
 };
+
+function mergeAttachments(...groups: Array<Attachment[] | undefined>): Attachment[] {
+  const unique = new Map<string, Attachment>();
+  for (const group of groups) {
+    for (const item of group || []) {
+      const key = item.path.trim().toLocaleLowerCase();
+      if (!key) continue;
+      unique.set(key, item);
+    }
+  }
+  // Retain a useful task-level material set without allowing a long-running chat
+  // to grow an unbounded multimodal request.
+  return [...unique.values()].slice(-12);
+}
+
+function classifyRuntimeInteraction(
+  content: string,
+  submittedAttachments: Attachment[]
+): RuntimeInteractionKind {
+  const normalized = content.trim().toLocaleLowerCase("zh-CN");
+  if (/^(停止|停下|终止|结束任务|取消任务|先停一下|stop|cancel)[。.!！?？\s]*$/i.test(normalized)) {
+    return "stop";
+  }
+  if (
+    /^(进度|进展|到哪了|怎么样了|现在在做什么|正在做什么|还在吗|卡住了吗|有结果了吗|status|progress)/i.test(normalized)
+    || /^(怎么这么慢|为什么这么慢|还要多久|是不是卡住了)[。.!！?？\s]*$/i.test(normalized)
+  ) {
+    return "progress";
+  }
+  if (/(改成|改为|不要再|不要做|先别|优先做|方向改|纠正|需求变更|换成|撤销|重做|调整为|以.+为准)/i.test(normalized)) {
+    return "correction";
+  }
+  if (submittedAttachments.length > 0) return "supplement";
+  // During an active run, a substantive user message is more likely to be a
+  // steering instruction than passive reference material. Treat imperative
+  // language as a correction even when the user does not say the word “纠正”.
+  if (/(请|需要|应该|必须|先|重点|别|不要|改|换|只要|以此|按这个|我要|我希望|记得|务必)/i.test(normalized)) {
+    return "correction";
+  }
+  return "supplement";
+}
+
+function compileRuntimeChanges(changes: RuntimeChange[]): PendingSubmission {
+  const correctionCount = changes.filter((item) => item.kind === "correction").length;
+  const lines = changes.map((item, index) =>
+    `${index + 1}. [${item.kind === "correction" ? "方向纠正" : "补充资料"}] ${item.content}`
+  );
+  return {
+    content: [
+      "请沿用当前任务、工作区、已验证结果和已保存上下文继续推进，不要另起一个无关任务。",
+      correctionCount
+        ? "用户在运行过程中修正了方向。以最新纠正为准；保留仍然有效的成果，只重做受影响部分。"
+        : "用户在运行过程中补充了资料。请在下一安全步骤合入，不重复已经完成且仍有效的工作。",
+      "",
+      ...lines,
+      "",
+      "先说明这些变化影响哪些后续步骤，再继续执行、验证并交付。"
+    ].join("\n"),
+    attachments: mergeAttachments(...changes.map((item) => item.attachments))
+  };
+}
+
+function AttachmentThumbnail({
+  file,
+  onOpen
+}: {
+  file: Attachment;
+  onOpen: (preview: { name: string; dataUrl: string }) => void;
+}) {
+  const [preview, setPreview] = useState<{ name: string; dataUrl: string } | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setPreview(null);
+    setFailed(false);
+    void window.nova.system.previewAttachment({ path: file.path })
+      .then((result) => {
+        if (active) setPreview({ name: result.name, dataUrl: result.dataUrl });
+      })
+      .catch(() => {
+        if (active) setFailed(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [file.path]);
+
+  if (!preview) {
+    return (
+      <span className="message-attachment-file">
+        <Image size={15} />
+        <span>{file.name}</span>
+        {failed && <small>预览不可用</small>}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="message-image-attachment"
+      onClick={() => onOpen(preview)}
+      aria-label={`查看图片 ${file.name}`}
+    >
+      <img src={preview.dataUrl} alt={file.name} />
+      <span><Image size={14} />{file.name}</span>
+    </button>
+  );
+}
 
 const providerLabels: Record<Provider, string> = {
   deepseek: "DeepSeek",
@@ -674,7 +793,7 @@ function KnowledgeExplorerWindow() {
             <dl>
               <div><dt>{wikiPages.length}</dt><dd>知识页</dd></div>
               <div><dt>{state?.knowledgeOs.entityTypes.length || 0}</dt><dd>对象类型</dd></div>
-              <div><dt>{state?.graph.confirmedEdgeCount || 0}</dt><dd>确认关系</dd></div>
+              <div><dt>{state?.graph.edges.filter((edge) => !edge.isInferred || edge.reviewState === "accepted").length || 0}</dt><dd>确认关系</dd></div>
               <div className={triggeredDecisions.length ? "attention" : ""}><dt>{triggeredDecisions.length}</dt><dd>需要处理</dd></div>
             </dl>
           </header>
@@ -785,6 +904,11 @@ function MainApp() {
   const [connected, setConnected] = useState<Partial<Record<Provider, boolean>>>({});
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [imagePreview, setImagePreview] = useState<{ name: string; dataUrl: string } | null>(null);
+  const retainedTaskAttachments = useMemo(
+    () => mergeAttachments(...messages.map((message) => message.attachments)),
+    [messages]
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("model");
   const [capabilities, setCapabilities] = useState<CapabilityState | null>(null);
@@ -904,17 +1028,20 @@ function MainApp() {
   const [pendingToolApproval, setPendingToolApproval] =
     useState<ToolApprovalRequestEvent | null>(null);
   const [rememberToolPermission, setRememberToolPermission] = useState(true);
+  const [rememberWorkspacePermission, setRememberWorkspacePermission] = useState(false);
+  const [workspacePermissions, setWorkspacePermissions] = useState<WorkspacePermissionGrant[]>([]);
   const [currentRuntimeEvent, setCurrentRuntimeEvent] = useState<{
     agent: string;
     action: string;
     detail: string;
     progress: number;
   } | null>(null);
-  const [queuedCorrection, setQueuedCorrection] =
-    useState<PendingSubmission | null>(null);
+  const [runtimeChangeQueue, setRuntimeChangeQueue] = useState<RuntimeChange[]>([]);
   const [newTaskGuideOpen, setNewTaskGuideOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(() => window.innerWidth > 1180);
   const [rightOpen, setRightOpen] = useState(false);
+  const [taskQuery, setTaskQuery] = useState("");
+  const [taskListExpanded, setTaskListExpanded] = useState(false);
   const [notice, setNotice] = useState("正在唤醒 AgentOS…");
   const [activity, setActivity] = useState<
     Array<{ id: string; title: string; detail: string; state: string; at: string }>
@@ -940,6 +1067,8 @@ function MainApp() {
   const streamBuffer = useRef("");
   const streamFlushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRuntimeEventAt = useRef(Date.now());
+  const runtimeChangeQueueRef = useRef<RuntimeChange[]>([]);
+  const suppressQueuedResumeTasksRef = useRef<Set<string>>(new Set());
 
   const serviceCount =
     boot?.kernel?.servicesTotal || boot?.kernel?.services?.length || 0;
@@ -959,6 +1088,22 @@ function MainApp() {
       .map((task) => task.workspaceRoot?.trim())
       .filter((value): value is string => Boolean(value))
   )).slice(0, 3), [tasks]);
+  const filteredTasks = useMemo(() => {
+    const query = taskQuery.trim().toLocaleLowerCase("zh-CN");
+    return query
+      ? tasks.filter((task) => `${task.title || ""} ${task.summary || ""}`.toLocaleLowerCase("zh-CN").includes(query))
+      : tasks;
+  }, [taskQuery, tasks]);
+  const visibleTasks = useMemo(() => {
+    if (taskQuery.trim() || taskListExpanded) return filteredTasks;
+    const recent = filteredTasks.slice(0, 8);
+    const selected = selectedTaskId
+      ? filteredTasks.find((task) => task.id === selectedTaskId)
+      : null;
+    return selected && !recent.some((task) => task.id === selected.id)
+      ? [selected, ...recent.slice(0, 7)]
+      : recent;
+  }, [filteredTasks, selectedTaskId, taskListExpanded, taskQuery]);
   const reviewCandidates = useMemo(
     () =>
       (Object.keys(providerLabels) as Provider[]).filter(
@@ -981,6 +1126,16 @@ function MainApp() {
   const currentTaskApprovalMode = selectedTaskId
     ? taskApprovalModes[selectedTaskId] || null
     : null;
+  const runtimeDraftKind = running && (draft.trim() || attachments.length)
+    ? classifyRuntimeInteraction(draft, attachments)
+    : null;
+  const runtimeSubmitLabel = runtimeDraftKind === "progress"
+    ? "查看进度"
+    : runtimeDraftKind === "correction"
+      ? "纠正方向"
+      : runtimeDraftKind === "stop"
+        ? "安全停止"
+        : "补充资料";
   const visibleKnowledgeGraph = useMemo(() => {
     const nodes = knowledgeState?.graph.nodes || [];
     const edges = knowledgeState?.graph.edges || [];
@@ -1246,6 +1401,10 @@ function MainApp() {
       const recoveredMode = parseExecutionMode(recovered.task.executionMode);
       if (recoveredMode) setExecutionMode(recoveredMode);
       setSelectedAgentPackId(recovered.task.agentPackId || null);
+      // Attachments are task inputs, not disposable message decorations. Keep
+      // the durable snapshot inputs visible after reopening a task so the user
+      // can switch to a vision/document-capable model without uploading again.
+      setAttachments(mergeAttachments(recovered.task.attachments));
       const restoredMessages = recovered.messages.map((message) => ({
           ...message,
           createdAt: new Date(message.createdAt).toLocaleTimeString("zh-CN", {
@@ -1582,9 +1741,33 @@ function MainApp() {
         setNotice(`请先在 Agent 中心启用 ${details.summary.name}`);
         return;
       }
+      let activeCapabilityReport = capabilityReport;
+      const missingRequired = capabilityReport.items.filter((item) =>
+        item.required && item.state !== "ready"
+      );
+      const canAuthorize = missingRequired.some((item) =>
+        (item.state === "available" && item.catalogId)
+        || (item.state === "registered-disabled" && item.matchedId)
+      );
+      let capabilityNotice = "";
+      let unresolvedRequired = missingRequired;
+      if (missingRequired.length && canAuthorize) {
+        const capabilityResult = await window.nova.capabilities.authorizeAgentCapabilities({
+          packId: id,
+          workspace
+        });
+        activeCapabilityReport = capabilityResult.report;
+        unresolvedRequired = capabilityResult.unresolved || [];
+        if (capabilityResult.changed.length) {
+          await loadCapabilities();
+          capabilityNotice = `已按你的确认补全 ${capabilityResult.changed.length} 项必要能力。`;
+        } else if (capabilityResult.canceled) {
+          capabilityNotice = "未安装 MCP；Agent 仍可启动，并会明确标出能力缺口。";
+        }
+      }
       setSelectedAgentPackId(id);
       setAgentLaunchGuide(details);
-      setAgentCapabilityReport(capabilityReport);
+      setAgentCapabilityReport(activeCapabilityReport);
       setAgentCalibration(calibration);
       setMcpDiscovery(null);
       setSelectedMcpCandidates(new Set());
@@ -1592,11 +1775,35 @@ function MainApp() {
       setAgentLaunchError("");
       setExecutionMode("Goal");
       setSettingsOpen(false);
+      const unresolvedMcp = unresolvedRequired.find((item) =>
+        item.required && item.kind === "mcp" && item.state === "missing"
+      );
+      if (unresolvedMcp) {
+        try {
+          const result = await window.nova.capabilities.searchStore({
+            kind: "mcp",
+            query: unresolvedMcp.name.replace(/\bMCP\b/ig, "").trim()
+          });
+          setStoreKind("mcp");
+          setStoreQuery(unresolvedMcp.name);
+          setStoreSources(result.sources);
+          setStoreItems(result.items);
+          const candidate = result.items.find((item) => item.installable);
+          if (candidate) {
+            setPendingStoreItem(candidate);
+            capabilityNotice += ` NOVA 在官方目录找到了“${candidate.name}”，请审阅来源与权限后决定是否自动接入。`;
+          } else {
+            capabilityNotice += ` 必要能力“${unresolvedMcp.name}”暂未找到可自动安装项。`;
+          }
+        } catch {
+          capabilityNotice += ` 必要能力“${unresolvedMcp.name}”暂未完成在线匹配，可稍后从扩展坞搜索。`;
+        }
+      }
       if (showGuide && details.onboarding) {
         setAgentLaunchOpen(true);
-        setNotice(`已装载 ${details.summary.name}；按引导补充现有线索即可开始`);
+        setNotice(`${capabilityNotice}已装载 ${details.summary.name}；按引导补充现有线索即可开始`);
       } else {
-        setNotice(`已装载 ${details.summary.name}；下一轮将使用它的角色、工作流与交付契约`);
+        setNotice(`${capabilityNotice}已装载 ${details.summary.name}；下一轮将使用它的角色、工作流与交付契约`);
       }
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "专业 Agent 装载失败");
@@ -1660,8 +1867,25 @@ function MainApp() {
     }
     if (item.kind === "mcp") {
       setAgentLaunchOpen(false);
-      openSettings("mcp");
-      await scanLocalMcpConfigurations();
+      setStoreKind("mcp");
+      setStoreQuery(item.name);
+      openSettings("plugins");
+      setStoreLoading(true);
+      try {
+        const result = await window.nova.capabilities.searchStore({
+          kind: "mcp",
+          query: item.name.replace(/\bMCP\b/ig, "").trim()
+        });
+        setStoreSources(result.sources);
+        setStoreItems(result.items);
+        setNotice(result.items.length
+          ? `已为“${item.name}”找到 ${result.items.length} 个 MCP 候选；安装前请核对来源和权限。`
+          : `官方目录没有找到“${item.name}”；你也可以扫描本机已有配置或粘贴服务地址。`);
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "MCP 目录查询失败，可改用本机扫描或手动接入");
+      } finally {
+        setStoreLoading(false);
+      }
       return;
     }
     setAgentLaunchOpen(false);
@@ -1723,34 +1947,72 @@ function MainApp() {
     }
   }
 
-  function useAgentLaunchOutcome(outcomeId: string) {
+  async function useAgentLaunchOutcome(outcomeId?: string) {
     const onboarding = agentLaunchGuide?.onboarding;
-    const outcome = onboarding?.outcomes.find((item) => item.id === outcomeId);
-    if (!onboarding || !outcome) return;
+    if (!onboarding || !agentLaunchGuide) return;
+    const outcome = onboarding.outcomes.find((item) => item.id === outcomeId)
+      || onboarding.outcomes[0]
+      || {
+        id: "start",
+        title: "开始执行",
+        description: "按这个 Agent 的工作流推进，并生成可检查的结果。",
+        promptTemplate: agentLaunchGuide.summary.starterPrompts[0]
+          || `请使用“${agentLaunchGuide.summary.name}”完成当前目标。先检查已有资料，再按工作流生成真实交付物；缺失信息保留为未知项。`
+      };
     const missing = onboarding.steps.filter((step) => {
       if (!step.required) return false;
       if (step.kind === "attachment") return attachments.length === 0;
       return !agentLaunchValues[step.id]?.trim();
     });
-    if (missing.length) {
-      const message = `开始前请补充：${missing.map((step) => step.title).join("、")}`;
-      setAgentLaunchError(message);
-      setNotice(message);
-      return;
-    }
+    // Missing material lowers confidence; it must never turn onboarding into a
+    // dead end. The Agent will report unknowns and ask for the next best input.
     setAgentLaunchError("");
     let prompt = outcome.promptTemplate;
     for (const step of onboarding.steps) {
+      const writtenValue = agentLaunchValues[step.id]?.trim();
       const value = step.kind === "attachment"
-        ? attachments.length
-          ? attachments.map((item) => item.name).join("、")
-          : "未提供附件"
-        : agentLaunchValues[step.id]?.trim() || "未提供";
+        ? writtenValue || (attachments.length
+          ? `已上传：${attachments.map((item) => item.name).join("、")}`
+          : "未提供附件")
+        : writtenValue || "未提供";
       prompt = prompt.split(`{{${step.id}}}`).join(value);
     }
-    setDraft(prompt);
+    if (attachments.length) {
+      prompt += `\n\n本轮共同资料：${attachments.map((item) => item.name).join("、")}。请读取这些附件，不要要求用户在多个输入项中重复上传。`;
+    }
+    if (missing.length) {
+      prompt += `\n\n当前仍缺少：${missing.map((step) => step.title).join("、")}。不要停止任务，也不要虚构；先使用现有资料完成可完成部分，并明确下一份最值得补充的资料。`;
+    }
     setAgentLaunchOpen(false);
-    setNotice(`已生成“${outcome.title}”任务；可以继续补充后开始处理`);
+    const submission = { content: prompt, attachments };
+    if (running) {
+      setDraft(prompt);
+      setNotice(`“${outcome.title}”已经准备好；当前任务结束后即可启动`);
+      return;
+    }
+    if (!connected[provider]) {
+      setDraft(prompt);
+      openSettings("model");
+      setNotice(`目标已保留。连接 ${providerLabels[provider]} 后即可直接启动`);
+      return;
+    }
+    if (!workspace) {
+      setDraft(prompt);
+      setNotice("目标已保留。请先选择任务文件夹，随后即可直接启动");
+      await chooseWorkspace();
+      return;
+    }
+    setNotice(missing.length
+      ? `正在用现有资料启动“${outcome.title}”；${missing.length} 项缺失信息会作为未知项保留`
+      : `正在启动“${outcome.title}”`);
+    if (currentTaskApprovalMode) {
+      void executeSubmission(currentTaskApprovalMode, submission, true);
+      return;
+    }
+    // Choosing an Agent outcome is an explicit start command. Use NOVA's
+    // low-risk workspace review by default; the runtime still interrupts for
+    // desktop control, external side effects or a new permission boundary.
+    void executeSubmission("workspace", submission, true);
   }
 
   async function loadExtensionProfiles() {
@@ -1806,12 +2068,16 @@ function MainApp() {
   }
 
   async function installStoreItem(item: StoreCapabilityItem) {
-    await window.nova.capabilities.installStore({ id: item.id });
+    await window.nova.capabilities.installStore({
+      id: item.id,
+      enable: item.kind === "mcp"
+    });
     setPendingStoreItem(null);
     await loadCapabilities();
+    await refreshAgentCapabilities();
     setNotice(
       item.kind === "mcp"
-        ? `“${item.name}”已登记并保持停用，请在 MCP 页审阅后启用`
+        ? `“${item.name}”已按你的确认登记并启用；运行时仍受工作区与工具权限约束`
         : `“${item.name}”已通过格式校验并安装`
     );
     addActivity("能力已加入扩展坞", `${item.sourceLabel} · ${item.name}`, "done");
@@ -1836,6 +2102,15 @@ function MainApp() {
       void loadExtensionProfiles();
     }
     if (section === "growth") void loadGrowthState();
+    if (section === "permissions") void loadWorkspacePermissions();
+  }
+
+  async function loadWorkspacePermissions() {
+    try {
+      setWorkspacePermissions(await window.nova.permissions.list());
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "无法读取工作区授权");
+    }
   }
 
   async function resolveGatewayRequest(
@@ -1885,7 +2160,19 @@ function MainApp() {
         const info = await window.nova.system.boot();
         if (!active) return;
         setBoot(info);
-        setModel(info.defaults.deepseek.model);
+        const restoredConnections = info.modelConnections || [];
+        setConnected(Object.fromEntries(
+          restoredConnections.map((connection) => [connection.provider, connection.connected])
+        ));
+        const preferredConnection = restoredConnections.find((connection) => connection.provider === "deepseek")
+          || restoredConnections[0];
+        if (preferredConnection) {
+          setProvider(preferredConnection.provider);
+          setModel(preferredConnection.model);
+          setModelEndpoint(preferredConnection.endpoint);
+        } else {
+          setModel(info.defaults.deepseek.model);
+        }
         await Promise.all([refreshTasks(), refreshArchivedTasks(), loadAgentPacks()]);
         const recoveredDesign = await window.nova.agentPacks.getDesignSession();
         if (recoveredDesign) {
@@ -1961,7 +2248,25 @@ function MainApp() {
   }), []);
 
   useEffect(() => {
-    const unsubscribe = window.nova.model.onEvent((event: AgentEvent) => {
+    const unsubscribe = window.nova.model.onEvent((incomingEvent: AgentEvent) => {
+      // Runtime events cross a process boundary and older/custom runtimes may
+      // omit fields that the current renderer normally receives. Never let a
+      // malformed progress event take down the whole React tree.
+      const event: AgentEvent = {
+        ...incomingEvent,
+        taskId: String(incomingEvent?.taskId || ""),
+        kind: String(incomingEvent?.kind || "progress"),
+        agent: String(incomingEvent?.agent || "NOVA"),
+        action: String(incomingEvent?.action || incomingEvent?.kind || "继续处理"),
+        detail: String(incomingEvent?.detail || ""),
+        progress: Number.isFinite(Number(incomingEvent?.progress))
+          ? Math.max(0, Math.min(100, Number(incomingEvent.progress)))
+          : 0,
+        activeUnits: Number.isFinite(Number(incomingEvent?.activeUnits))
+          ? Math.max(0, Number(incomingEvent.activeUnits))
+          : 0
+      };
+      if (!event.taskId) return;
       const completed = event.kind === "completed" && event.progress >= 100;
       setTasks((current) => current.map((task) =>
         task.id === event.taskId
@@ -1976,6 +2281,10 @@ function MainApp() {
       ));
       if (event.kind === "failed" || completed) {
         setRunningTaskIds((current) => {
+          // Model runs are settled by executeSubmission.finally. Keeping the
+          // running flag until that promise returns prevents a queued user
+          // correction from starting before the current result is persisted.
+          if (taskRunIds.current.has(event.taskId)) return current;
           const next = new Set(current);
           next.delete(event.taskId);
           return next;
@@ -2163,6 +2472,7 @@ function MainApp() {
   useEffect(() => window.nova.model.onApprovalRequest((request) => {
     if (request.taskId !== selectedTaskIdRef.current) return;
     setRememberToolPermission(true);
+    setRememberWorkspacePermission(false);
     setPendingToolApproval(request);
     setNotice(`NOVA 需要你确认一步新权限：${request.title}`);
   }), []);
@@ -2195,26 +2505,47 @@ function MainApp() {
         (Date.now() - lastRuntimeEventAt.current) / 1000
       );
       if (silenceSeconds >= 25) {
-        setRuntimePulse(
-          `模型已 ${silenceSeconds} 秒没有返回新数据，可继续等待或停止后重试`
-        );
+        setRuntimePulse("较长推理仍在后台继续；你可以补充资料、纠正方向或安全停止");
       } else if (silenceSeconds >= 8) {
-        setRuntimePulse(
-          `正在等待模型下一段响应 · ${silenceSeconds} 秒`
-        );
+        setRuntimePulse("正在等待模型完成当前思考，不需要保持在这个页面");
       }
     }, 2000);
     return () => clearInterval(timer);
   }, [running]);
 
   useEffect(() => {
-    if (!running && queuedCorrection) {
-      setPendingSubmission(queuedCorrection);
-      setQueuedCorrection(null);
-      setApprovalOpen(true);
-      setNotice("上一条路径已停止，请确认纠正后的执行权限");
+    runtimeChangeQueueRef.current = runtimeChangeQueue;
+  }, [runtimeChangeQueue]);
+
+  useEffect(() => {
+    if (running || !selectedTaskId) return;
+    const currentQueue = runtimeChangeQueue.filter((item) => item.taskId === selectedTaskId);
+    if (currentQueue.length === 0) return;
+    if (suppressQueuedResumeTasksRef.current.has(selectedTaskId)) {
+      suppressQueuedResumeTasksRef.current.delete(selectedTaskId);
+      return;
     }
-  }, [running, queuedCorrection]);
+    const queued = currentQueue;
+    const submission = compileRuntimeChanges(queued);
+    const remaining = runtimeChangeQueue.filter((item) => item.taskId !== selectedTaskId);
+    runtimeChangeQueueRef.current = remaining;
+    setRuntimeChangeQueue(remaining);
+    const corrections = queued.filter((item) => item.kind === "correction").length;
+    setNotice(corrections
+      ? `当前步骤已安全落点，正在按 ${corrections} 条方向纠正继续`
+      : `当前步骤已安全落点，正在合入 ${queued.length} 条补充资料`);
+    const approvalMode = currentTaskApprovalMode;
+    const timer = setTimeout(() => {
+      if (approvalMode) {
+        void executeSubmission(approvalMode, submission, true);
+      } else {
+        setPendingSubmission(submission);
+        setRememberTaskPermission(true);
+        setApprovalOpen(true);
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [currentTaskApprovalMode, running, runtimeChangeQueue, selectedTaskId]);
 
   useEffect(() => {
     threadEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -2268,10 +2599,27 @@ function MainApp() {
       setConnected((value) => ({ ...value, [provider]: true }));
       setModel(result.model);
       setModelEndpoint(result.endpoint || modelEndpoint);
+      setBoot((current) => current ? {
+        ...current,
+        modelConnections: [
+          ...(current.modelConnections || []).filter((item) => item.provider !== provider),
+          {
+            provider,
+            model: result.model,
+            endpoint: result.endpoint,
+            connected: true,
+            hasCredential: Boolean(apiKey.trim())
+              || current.modelConnections?.some((item) => item.provider === provider && item.hasCredential)
+              || false
+          }
+        ]
+      } : current);
       setDiscoveredModels(result.discoveredModels || []);
       setApiKey("");
       setSettingsOpen(false);
-      setNotice(`${providerLabels[provider]} 已连接，密钥仅保留在本次运行内存`);
+      setNotice(result.persisted
+        ? `${providerLabels[provider]} 已连接；凭据已由系统加密保存，重启后会自动恢复`
+        : result.warning || `${providerLabels[provider]} 已连接，本次运行内有效`);
       addActivity("模型通道已连接", `${providerLabels[provider]} · ${model}`, "done");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "模型连接失败");
@@ -2280,31 +2628,102 @@ function MainApp() {
 
   function changeProvider(next: Provider) {
     setProvider(next);
-    setModel(boot?.defaults?.[next]?.model || providerModels[next][0]);
-    setModelEndpoint(boot?.defaults?.[next]?.endpoint || "");
+    const restored = boot?.modelConnections?.find((connection) => connection.provider === next);
+    setModel(restored?.model || boot?.defaults?.[next]?.model || providerModels[next][0]);
+    setModelEndpoint(restored?.endpoint || boot?.defaults?.[next]?.endpoint || "");
     setDiscoveredModels([]);
   }
 
   async function sendMessage(event?: FormEvent) {
     event?.preventDefault();
-    const content = draft.trim();
-    if (!content) return;
+    const typedContent = draft.trim();
+    if (!typedContent && !attachments.length) return;
+    const content = typedContent || `补充资料：${attachments.map((item) => item.name).join("、")}`;
     if (running) {
+      const interaction = classifyRuntimeInteraction(content, attachments);
       const runId = selectedTaskId
         ? taskRunIds.current.get(selectedTaskId)
         : undefined;
-      if (!runId) {
-        setNotice("Agent Pack 正在执行确定性构建与体检；完成后可以在任务中继续纠正或重新生成。");
+      const userMessage: Message = {
+        id: crypto.randomUUID(),
+        role: "user",
+        content,
+        createdAt: now(),
+        attachments
+      };
+      if (interaction === "progress") {
+        const progressMessage = [
+          `现在：${currentRuntimeEvent?.action || currentPlanStep?.title || "正在推进当前步骤"}`,
+          currentRuntimeEvent?.detail || currentPlanStep?.detail || runtimePulse,
+          `下一步：${taskPlan.find((step) => step.status === "pending")?.title || "形成并检查本轮结果"}`
+        ].join("\n\n");
+        setMessages((items) => [...items, userMessage, {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: progressMessage,
+          createdAt: now()
+        }]);
+        setDraft("");
+        setAttachments([]);
+        setNotice("任务仍在后台运行，查看进度不会打断它");
         return;
       }
-      const correction = { content, attachments };
+      if (interaction === "stop") {
+        if (selectedTaskId) suppressQueuedResumeTasksRef.current.add(selectedTaskId);
+        const remaining = runtimeChangeQueueRef.current.filter((item) => item.taskId !== selectedTaskId);
+        runtimeChangeQueueRef.current = remaining;
+        setRuntimeChangeQueue(remaining);
+        setMessages((items) => [...items, userMessage, {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: "正在安全停止当前步骤。已经完成的文件、上下文和交付物会保留。",
+          createdAt: now()
+        }]);
+        setDraft("");
+        setAttachments([]);
+        if (runId) await window.nova.model.cancel({ runId });
+        setNotice("正在安全停止当前执行");
+        return;
+      }
+      const change: RuntimeChange = {
+        id: crypto.randomUUID(),
+        taskId: selectedTaskId || "",
+        kind: interaction,
+        content,
+        attachments,
+        queuedAt: now()
+      };
+      const nextQueue = [...runtimeChangeQueueRef.current, change].slice(-8);
+      runtimeChangeQueueRef.current = nextQueue;
+      setRuntimeChangeQueue(nextQueue);
+      setMessages((items) => [...items, userMessage, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: interaction === "correction"
+          ? "方向纠正已收到，正在切换执行路径。当前可取消步骤会立即停止，已完成的文件和上下文会保留，旧方向的后续结果不会进入交付。"
+          : "补充资料已收到，正在暂停当前推理并合入新资料。已完成的结果会保留，不需要重新开始。",
+        createdAt: now()
+      }]);
       setDraft("");
       setAttachments([]);
-      setQueuedCorrection(correction);
+      setRuntimePulse(interaction === "correction"
+        ? "正在停止旧方向并切换到你的最新要求"
+        : "正在暂停当前推理并合入新资料");
+      setNotice(interaction === "correction"
+        ? "最新方向已置顶，正在抢占当前可取消步骤"
+        : "新资料已置顶，正在抢占当前可取消步骤");
+      // User guidance is a control-plane event, not another low-priority chat
+      // message. Cancel the active model/tool step immediately. The existing
+      // task snapshot and workspace files remain intact; once the cancellation
+      // settles, the queue effect above resumes the same task with all guidance
+      // coalesced into one request.
       if (runId) {
-        await window.nova.model.cancel({ runId });
+        try {
+          await window.nova.model.cancel({ runId });
+        } catch (error) {
+          setNotice(`纠正已经保存；当前步骤停止较慢，将在安全落点自动切换：${readableRunError(error)}`);
+        }
       }
-      setNotice("正在停止上一条路径，随后按你的纠正继续");
       return;
     }
     if (!connected[provider]) {
@@ -2334,6 +2753,27 @@ function MainApp() {
   ) {
     if (!submission) return;
     const { content, attachments: submittedAttachments } = submission;
+    if (!workspace) {
+      setNotice("请先选择任务文件夹，NOVA 才能在明确边界内继续。 ");
+      return;
+    }
+    const workspaceAccess = await window.nova.system.checkWorkspaceAccess({ workspace });
+    if (!workspaceAccess.exists || !workspaceAccess.readable) {
+      setPendingSubmission(submission);
+      setApprovalOpen(false);
+      setNotice("当前任务文件夹已移动或无法读取。重新选择文件夹后可以直接继续，内容不会丢失。");
+      return;
+    }
+    if (approvalMode !== "readOnly" && !workspaceAccess.writable) {
+      setPendingSubmission(submission);
+      setApprovalOpen(false);
+      setNotice("这个文件夹目前是只读的。请选择可写文件夹，或把本轮权限改为只读分析。");
+      return;
+    }
+    const activeTaskAttachments = mergeAttachments(
+      ...messages.map((message) => message.attachments),
+      submittedAttachments
+    );
     setPendingSubmission(null);
     setApprovalOpen(false);
     const runTaskId = selectedTaskId
@@ -2345,6 +2785,7 @@ function MainApp() {
     }
     setTaskCapsule({ status: "not-compiled", detail: "正在按当前目标更新本轮理解…" });
     setRunningTaskIds((current) => new Set(current).add(runTaskId));
+    setRightOpen(true);
     setTasks((current) => {
       if (current.some((task) => task.id === runTaskId)) {
         return current.map((task) => task.id === runTaskId
@@ -2415,7 +2856,7 @@ function MainApp() {
           role,
           content: body
         })),
-        attachments: userMessage.attachments || []
+        attachments: activeTaskAttachments
       });
       if (selectedTaskIdRef.current === runTaskId) {
         selectedTaskIdRef.current = result.taskId;
@@ -2463,10 +2904,27 @@ function MainApp() {
         addActivity("执行已停止", "等待新的方向", "done");
         return;
       }
-      const isPermissionError = /access to the path is denied|eacces|eperm|unauthorized/i.test(message);
-      const userFacingMessage = isPermissionError
-        ? "当前工作区没有写入权限。请重新选择一个可写文件夹，或授权后在本任务中重试。"
-        : message;
+      const isPathAccessError = /access to the path is denied|eacces|eperm|permission denied|read-only file system|readonly filesystem/i.test(message);
+      // The folder passed an actual create/write probe immediately before the run.
+      // A later AccessDenied therefore normally points to a protected/locked child
+      // file or an internal runtime path, not to misuse of the selected workspace.
+      const isWorkspacePermissionError = isPathAccessError && !workspaceAccess.writable;
+      const isFileAccessError = isPathAccessError && workspaceAccess.writable;
+      const isAuthenticationError = /\b(401|403)\b|unauthorized|invalid api key|authentication|forbidden|鉴权|凭证|令牌/i.test(message);
+      const isToolApprovalError = /approval|permission boundary|not approved|拒绝授权|未授权工具|权限请求/i.test(message);
+      const isUnsupportedAttachment = /(image|vision|attachment|multimodal|图片|图像|附件).*(not support|unsupported|不支持)/i.test(message)
+        || /(not support|unsupported|不支持).*(image|vision|attachment|multimodal|图片|图像|附件)/i.test(message);
+      const userFacingMessage = isAuthenticationError
+          ? "模型或外部能力的身份验证没有通过。工作区本身不一定有问题；请检查 API Key、登录状态或 MCP 授权后重试。"
+          : isToolApprovalError
+            ? "本轮需要的工具权限没有获批。你可以允许这项操作，或让 NOVA 改用不需要该权限的方案继续。"
+          : isWorkspacePermissionError
+            ? "任务文件夹没有通过真实写入测试。请检查系统保护、文件夹属性，或重新选择一个可写文件夹。"
+          : isFileAccessError
+            ? "任务文件夹本身可以写入，但某个具体文件或 NOVA 内部状态目录被系统拒绝访问。通常是文件占用或系统保护，不需要重新开始；关闭占用程序后可直接重试。"
+        : isUnsupportedAttachment
+          ? `当前模型不能读取这类附件。${activeTaskAttachments.length} 个任务资料都已保留，请切换到支持图片或文档的模型后直接继续，不需要重新上传。`
+          : message;
       if (selectedTaskIdRef.current === runTaskId) setNotice(userFacingMessage);
       addActivity("本轮需要处理", message, "failed");
       if (selectedTaskIdRef.current === runTaskId) setMessages((items) => [
@@ -2500,6 +2958,10 @@ function MainApp() {
 
   async function stopCurrentRun() {
     if (!selectedTaskId) return;
+    suppressQueuedResumeTasksRef.current.add(selectedTaskId);
+    const remaining = runtimeChangeQueueRef.current.filter((item) => item.taskId !== selectedTaskId);
+    runtimeChangeQueueRef.current = remaining;
+    setRuntimeChangeQueue(remaining);
     const runId = taskRunIds.current.get(selectedTaskId);
     if (!runId) return;
     await window.nova.model.cancel({ runId });
@@ -2509,12 +2971,21 @@ function MainApp() {
   async function resolveToolApproval(approved: boolean) {
     const request = pendingToolApproval;
     if (!request) return;
+    const rememberThisTask = approved
+      && rememberToolPermission
+      && request.canRememberForTask !== false
+      && !rememberWorkspacePermission;
+    const rememberThisWorkspace = approved
+      && rememberWorkspacePermission
+      && request.canPersistForWorkspace === true
+      && request.requiresExplicitApproval !== true;
     setPendingToolApproval(null);
     try {
       const result = await window.nova.model.resolveApproval({
         approvalId: request.id,
         approved,
-        rememberForTask: approved && rememberToolPermission
+        rememberForTask: rememberThisTask,
+        rememberForWorkspace: rememberThisWorkspace
       });
       if (!result.resolved || result.expired) {
         setNotice("这条权限请求已经过期，NOVA 会按当前任务状态继续处理。");
@@ -2522,8 +2993,10 @@ function MainApp() {
       }
       setNotice(
         approved
-          ? rememberToolPermission
-            ? `已允许 ${request.toolName}，本任务内相同能力将自动放行`
+          ? rememberThisWorkspace
+            ? `已允许 ${request.toolName}，以后在这个工作区内自动放行`
+            : rememberThisTask
+              ? `已允许 ${request.toolName}，本任务内相同能力将自动放行`
             : `已允许 ${request.toolName} 执行这一次`
           : `已拒绝 ${request.toolName}，NOVA 会尝试不使用它继续推进`
       );
@@ -2574,6 +3047,14 @@ function MainApp() {
     setNewTaskGuideOpen(true);
   }
 
+  const headingNotice = notice
+    .replace("已恢复任务上下文，可以继续追问或修改方向", "上下文已恢复，可继续追问")
+    .replace("新线程已准备好，告诉我想达成什么结果", "新任务已就绪")
+    .replace("内核在线，等待你的目标", "等待你的目标");
+  const headingAlert = /(失败|错误|异常|阻塞|权限|恢复|连接|需要|未完成)/.test(headingNotice)
+    ? headingNotice
+    : "";
+
   return (
     <div className={`app-shell ${leftOpen ? "" : "rail-collapsed"} ${rightOpen ? "" : "trace-collapsed"}`}>
       <header className="titlebar">
@@ -2589,17 +3070,14 @@ function MainApp() {
           </button>
           <div className="brand-core"><span /></div>
           <strong>NOVA</strong>
-          <span className="brand-edition">AGENTOS · ELECTRON</span>
         </div>
         <div className="kernel-strip">
           <span className={`status-dot ${boot ? "online" : ""}`} />
           <span>
             {boot
-              ? `内核 ${boot.kernel.kernelVersion || boot.kernel.version || "ONLINE"}`
+              ? "运行正常"
               : "正在启动"}
           </span>
-          <i />
-          <span>{serviceReady}/{serviceCount || 9} SERVICES</span>
           <i />
           <span className={connected[provider] ? "accent" : ""}>
             {connected[provider] ? `${providerLabels[provider]} 已连接` : "需要连接模型"}
@@ -2635,9 +3113,25 @@ function MainApp() {
           <span>任务空间</span>
           <small>{tasks.length}</small>
         </div>
+        {tasks.length > 8 && (
+          <label className="task-search">
+            <Search size={14} />
+            <input
+              value={taskQuery}
+              onChange={(event) => setTaskQuery(event.target.value)}
+              placeholder="搜索任务"
+              aria-label="搜索任务"
+            />
+            {taskQuery && (
+              <button type="button" aria-label="清空搜索" onClick={() => setTaskQuery("")}>
+                <X size={13} />
+              </button>
+            )}
+          </label>
+        )}
         <div className="task-list">
-          {tasks.length ? (
-            tasks.slice(0, 12).map((task) => (
+          {visibleTasks.length ? (
+            visibleTasks.map((task) => (
               <div
                 className={`task-card ${selectedTaskId === task.id ? "selected" : ""}`}
                 key={task.id}
@@ -2650,8 +3144,7 @@ function MainApp() {
                   <span className={`task-state ${statusTone(task.status)}`} />
                   <span className="task-copy">
                     <strong>{task.title || "未命名任务"}</strong>
-                    <small>{taskSubtitle(task)}</small>
-                    <span className="task-progress"><i /></span>
+                    <small>{statusTone(task.status) === "done" ? "已完成" : statusTone(task.status) === "failed" ? "需处理" : statusTone(task.status) === "running" ? "进行中" : "已保存"}</small>
                   </span>
                 </button>
                 <button
@@ -2666,12 +3159,27 @@ function MainApp() {
                 </button>
               </div>
             ))
+          ) : taskQuery ? (
+            <div className="task-search-empty">
+              <Search size={18} />
+              <span>没有匹配的任务</span>
+            </div>
           ) : (
             <div className="rail-empty">
               <Sparkles size={22} />
               <strong>从一个真实目标开始</strong>
               <span>任务会自动沉淀在这里</span>
             </div>
+          )}
+          {!taskQuery && filteredTasks.length > 8 && (
+            <button
+              type="button"
+              className="task-list-more"
+              onClick={() => setTaskListExpanded((value) => !value)}
+            >
+              {taskListExpanded ? "收起任务" : `查看其余 ${filteredTasks.length - 8} 个任务`}
+              <ChevronDown size={14} />
+            </button>
           )}
         </div>
         <div className="rail-footer">
@@ -2697,63 +3205,58 @@ function MainApp() {
       <main className="workspace">
         <section className="workspace-heading">
           <div>
-            <span className="eyebrow">{running ? "EXECUTING" : "READY"}</span>
             <h1>{messages.length ? "持续推进当前目标" : "把想做成的事交给我"}</h1>
-            <p>{notice}</p>
+            {headingAlert && <p title={notice}>{headingAlert}</p>}
           </div>
           <div className="heading-actions">
+            <button
+              type="button"
+              className={`active-agent-chip ${selectedAgentPack ? "active" : ""}`}
+              disabled={running}
+              onClick={() => openSettings("agents")}
+              title="切换 Agent"
+            >
+              <Bot size={15} />
+              <span>{selectedAgentPack ? selectedAgentPack.name : "通用 NOVA"}</span>
+            </button>
             <button className="workspace-chip" onClick={chooseWorkspace}>
               <FolderOpen size={15} />
               {workspaceName}
             </button>
-            <button
-              className="trace-toggle"
-              onClick={() => setRightOpen((value) => !value)}
-              title="显示或收起执行过程"
-            >
-              <Activity size={17} />
-            </button>
+            {!rightOpen && (
+              <button
+                type="button"
+                className="trace-toggle trace-reopen"
+                onClick={() => setRightOpen(true)}
+                title="展开执行过程"
+                aria-label="展开执行过程"
+              >
+                <Activity size={17} />
+                <span>执行过程</span>
+              </button>
+            )}
           </div>
         </section>
 
         <section className="threadspace">
-          <div className="thread-header">
-            <div className={`nova-orb ${running ? "thinking" : ""}`}><span /></div>
-            <div>
-              <span>{selectedAgentPack ? selectedAgentPack.name : "NOVA THREADSPACE"}</span>
-              <strong>{running ? "正在建立解题路径" : "上下文会沿着同一条任务脉络延续"}</strong>
-            </div>
-            <button
-              type="button"
-              className={`thread-agent-pack ${selectedAgentPack ? "active" : ""}`}
-              disabled={running}
-              onClick={() => openSettings("agents")}
-            >
-              <Bot size={15} />
-              {selectedAgentPack ? selectedAgentPack.category : "通用 NOVA"}
-            </button>
-          </div>
-
           <div className="conversation">
             {messages.length === 0 ? (
               <div className="empty-state">
                 <div className="empty-mark">
                   <Zap size={25} />
                 </div>
-                <h2>{workspace ? "说清想得到的结果" : "先为任务选择一个文件夹"}</h2>
+                <h2>{workspace ? "准备好了，想先做成什么？" : "先选一个保存结果的文件夹"}</h2>
                 <p>{workspace
-                  ? `本任务会在“${workspaceName}”中读取资料和保存交付物。描述最终结果即可。`
-                  : "每个任务先绑定一个明确的文件夹，资料、修改和交付物都留在这里，不会混到其他项目。"}</p>
-                <div className="empty-state-actions">
-                  <button type="button" className="empty-agent-action" onClick={openAgentFoundry}>
-                    <Sparkles size={16} />
-                    创建一个专属 Agent
-                  </button>
-                  <button type="button" className="empty-workspace-action" onClick={newTask}>
-                    <FolderOpen size={16} />
-                    {workspace ? "重新选择任务文件夹" : "选择任务文件夹"}
-                  </button>
-                </div>
+                  ? `直接在下方说结果。NOVA 会从“${workspaceName}”读取资料，并把成果留在这里。`
+                  : "资料、修改和交付物都会留在这个文件夹，不会和其他任务混在一起。"}</p>
+                {!workspace && (
+                  <div className="empty-state-actions">
+                    <button type="button" className="empty-workspace-action primary" onClick={newTask}>
+                      <FolderOpen size={16} />
+                      选择任务文件夹
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="message-list">
@@ -2777,6 +3280,13 @@ function MainApp() {
                   const supportingArtifacts = deliveryArtifacts.filter(
                     (artifact) => !featuredArtifacts.includes(artifact)
                   );
+                  const plainDeliverySummary = message.delivery
+                    ? message.delivery.status === "PARTIAL"
+                      ? "仍有未完成项，可查看详情或让 NOVA 继续。"
+                      : deliveryArtifacts.length
+                        ? `已生成 ${deliveryArtifacts.length} 个文件，可直接打开或修改。`
+                        : "结果已保存在对话中，可继续修改或补充资料。"
+                    : "";
                   return (
                   <article className={`message ${message.role}`} key={message.id}>
                     <div className="message-meta">
@@ -2803,14 +3313,14 @@ function MainApp() {
                               {presentation.outcome?.verdict ||
                                 (message.delivery.status === "PARTIAL" ? "还需要一步" : "已经可以接手")}
                             </strong>
-                            <small>{presentation.outcome?.reason || message.delivery.summary}</small>
+                            <small>{plainDeliverySummary}</small>
                           </div>
                           <button
                             type="button"
                             className="delivery-review-open"
                             onClick={() => openDeliverySummary("本轮交付说明", presentation.display)}
                           >
-                            窗内审查
+                            查看与修改
                           </button>
                           <b>
                             {message.delivery.reviewState === "accepted"
@@ -2825,7 +3335,7 @@ function MainApp() {
 
                         {!!featuredArtifacts.length && (
                           <section className="delivery-artifacts">
-                            <header><strong>直接查看交付文件</strong><span>{deliveryArtifacts.length} 项</span></header>
+                            <header><strong>本轮交付物</strong><span>{deliveryArtifacts.length} 项</span></header>
                             <div>
                               {featuredArtifacts.map((artifact) => (
                                 <button
@@ -2864,7 +3374,7 @@ function MainApp() {
                         )}
 
                         <details className="delivery-technical-details" open={message.delivery.status === "PARTIAL"}>
-                          <summary>更多文件与技术详情 <ChevronDown size={15} /></summary>
+                          <summary>检查记录（可选） <ChevronDown size={15} /></summary>
 
                           {!!supportingArtifacts.length && (
                             <section className="delivery-artifacts supporting">
@@ -2947,10 +3457,14 @@ function MainApp() {
                     {!!message.attachments?.length && (
                       <div className="message-attachments">
                         {message.attachments.map((file) => (
-                          <span key={file.id}>
-                            {file.kind === "image" ? <Image size={14} /> : <FileCode2 size={14} />}
-                            {file.name}
-                          </span>
+                          file.kind === "image" ? (
+                            <AttachmentThumbnail key={file.id} file={file} onOpen={setImagePreview} />
+                          ) : (
+                            <span className="message-attachment-file" key={file.id}>
+                              <FileCode2 size={14} />
+                              <span>{file.name}</span>
+                            </span>
+                          )
                         ))}
                       </div>
                     )}
@@ -3006,7 +3520,9 @@ function MainApp() {
                 sendMessage();
               }
             }}
-            placeholder="描述想达成的结果，NOVA 会自己理解工程并持续推进…"
+            placeholder={running
+              ? "任务仍在后台执行。可以问“到哪了”，补充文件，或说“改成……”"
+              : "描述想达成的结果，NOVA 会自己理解工程并持续推进…"}
             rows={3}
           />
           <div className="composer-bar">
@@ -3016,13 +3532,6 @@ function MainApp() {
                   <Paperclip size={17} />
                   <span>附件</span>
                 </button>
-                <button type="button" onClick={chooseWorkspace} title="选择工作区">
-                  <FolderOpen size={17} />
-                </button>
-                <span className="conversation-memory">
-                  <MessageSquareText size={14} />
-                  {messages.length ? `${messages.length} 条上下文已保存` : "新会话"}
-                </span>
               </div>
               <div className="composer-execution-actions">
               <label className={`agent-pack-control ${selectedAgentPack ? "active" : ""}`}>
@@ -3043,38 +3552,6 @@ function MainApp() {
                 </select>
                 <ChevronDown size={14} />
               </label>
-              {selectedAgentPack && agentLaunchGuide?.onboarding && (
-                <button
-                  type="button"
-                  className="agent-guide-reopen"
-                  disabled={running}
-                  onClick={() => setAgentLaunchOpen(true)}
-                  title="打开这个专业 Agent 的启动资料引导"
-                >
-                  <Sparkles size={15} />
-                  <span>怎么开始</span>
-                </button>
-              )}
-              {currentTaskApprovalMode && (
-                <button
-                  type="button"
-                  className="permission-profile-control"
-                  disabled={running}
-                  title="当前任务会沿用此权限策略；点击后改为下轮重新确认"
-                  onClick={() => {
-                    if (!selectedTaskId) return;
-                    setTaskApprovalModes((current) => {
-                      const next = { ...current };
-                      delete next[selectedTaskId];
-                      return next;
-                    });
-                    setNotice("已取消沿用权限；下一轮执行前会重新让你选择");
-                  }}
-                >
-                  <ShieldCheck size={15} />
-                  <span>{approvalModeLabel(currentTaskApprovalMode)}</span>
-                </button>
-              )}
               <label className={`agent-mode-control ${executionMode === "Autopilot" ? "active" : ""}`}>
                 <BrainCircuit size={16} />
                 <select
@@ -3091,27 +3568,64 @@ function MainApp() {
                 </select>
                 <ChevronDown size={14} />
               </label>
-              <button
-                type="button"
-                className={`cross-review-control ${crossModelReview ? "active" : ""}`}
-                disabled={running}
-                title="让另一个已连接的模型只读复核结果；最多额外请求 3 轮"
-                onClick={() => {
-                  if (!reviewCandidates.length) {
-                    openSettings("model");
-                    setNotice("双模型复核需要再连接一个不同来源的模型");
-                    return;
-                  }
-                  setCrossModelReview((value) => !value);
-                }}
-              >
-                <ShieldCheck size={16} />
-                <span>
-                  {crossModelReview
-                    ? `双模型复核 · ${providerLabels[reviewCandidates[0]]}`
-                    : "双模型复核"}
-                  </span>
-                </button>
+              <details className="composer-more-options">
+                <summary title="更多任务设置">
+                  <Settings2 size={16} />
+                  <span>更多</span>
+                  <ChevronDown size={13} />
+                </summary>
+                <div className="composer-more-menu">
+                  <button type="button" onClick={chooseWorkspace} disabled={running}>
+                    <FolderOpen size={15} />
+                    <span>切换工作区</span>
+                  </button>
+                  {selectedAgentPack && agentLaunchGuide?.onboarding && (
+                    <button type="button" disabled={running} onClick={() => setAgentLaunchOpen(true)}>
+                      <Sparkles size={15} />
+                      <span>查看 Agent 使用引导</span>
+                    </button>
+                  )}
+                  {currentTaskApprovalMode && (
+                    <button
+                      type="button"
+                      disabled={running}
+                      onClick={() => {
+                        if (!selectedTaskId) return;
+                        setTaskApprovalModes((current) => {
+                          const next = { ...current };
+                          delete next[selectedTaskId];
+                          return next;
+                        });
+                        setNotice("已取消沿用权限；下一轮执行前会重新让你选择");
+                      }}
+                    >
+                      <ShieldCheck size={15} />
+                      <span>权限：{approvalModeLabel(currentTaskApprovalMode)}</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className={crossModelReview ? "active" : ""}
+                    disabled={running}
+                    onClick={() => {
+                      if (!reviewCandidates.length) {
+                        openSettings("model");
+                        setNotice("双模型复核需要再连接一个不同来源的模型");
+                        return;
+                      }
+                      setCrossModelReview((value) => !value);
+                    }}
+                  >
+                    <ShieldCheck size={15} />
+                    <span>{crossModelReview ? "双模型复核已开启" : "开启双模型复核"}</span>
+                  </button>
+                  <div className="composer-context-summary">
+                    <MessageSquareText size={14} />
+                    <span>{messages.length ? `${messages.length} 条上下文已保存` : "新会话"}</span>
+                    {!!retainedTaskAttachments.length && <small>· {retainedTaskAttachments.length} 个资料已保留</small>}
+                  </div>
+                </div>
+              </details>
               </div>
             </div>
             <div className="run-actions">
@@ -3121,11 +3635,11 @@ function MainApp() {
                   停止
                 </button>
               )}
-              <button className="send-button" disabled={!draft.trim()}>
+              <button className="send-button" disabled={!draft.trim() && !attachments.length}>
                 {running ? <RefreshCw size={18} /> : <Send size={18} />}
                 <span>
                   {running
-                    ? "纠正方向"
+                    ? runtimeSubmitLabel
                     : connected[provider]
                       ? "开始处理"
                       : "连接模型"}
@@ -3142,7 +3656,16 @@ function MainApp() {
             <span>执行过程</span>
             <small>当前步骤 · 下一步 · 阶段产出</small>
           </div>
-          <button onClick={() => setRightOpen(false)} aria-label="收起执行过程"><X size={16} /></button>
+          <button
+            type="button"
+            className="trace-collapse"
+            onClick={() => setRightOpen(false)}
+            aria-label="收起执行过程"
+            title="收起执行过程"
+          >
+            <span>收起</span>
+            <ChevronRight size={15} />
+          </button>
         </div>
         <div className={`progress-card execution-now ${running ? "running" : ""}`}>
           <span>
@@ -3159,7 +3682,7 @@ function MainApp() {
           <p>
             {running
               ? currentRuntimeEvent?.detail || currentPlanStep?.detail || runtimePulse
-              : currentPlanStep?.detail || "开始任务后，每一步计划、执行者与阶段产出都会显示在这里。"}
+              : currentPlanStep?.detail || "任务开始后，这里显示当前步骤和结果。"}
           </p>
           <small>
             {running
@@ -3276,58 +3799,63 @@ function MainApp() {
           </section>
         )}
         {!!Object.keys(agentUnits).length && (
-          <section className="agent-roster">
-            <header>
-              <span>Agent 工作组</span>
-              <small>{Object.keys(agentUnits).length} 个执行单元</small>
-            </header>
-            {Object.values(agentUnits).map((unit) => (
-              <details key={unit.agent} open={unit.agent.includes("子 Agent")}>
-                <summary>
-                  <span className={`agent-state ${unit.kind}`} />
-                  <div>
-                    <strong>{unit.agent}</strong>
-                    <small>{unit.action}</small>
-                  </div>
-                  <time>{unit.at}</time>
-                </summary>
-                <p>{unit.detail}</p>
-                {!!unit.outputs.length && (
-                  <div className="agent-output">
-                    <span>阶段产出</span>
-                    {unit.outputs.map((output, index) => (
-                      <pre key={`${unit.agent}-${index}`}>{output}</pre>
-                    ))}
-                  </div>
-                )}
-              </details>
-            ))}
-          </section>
-        )}
-        <div className="trace-events">
-          {activity.length ? (
-            activity.map((item) => (
-              <div className={`trace-item ${item.state}`} key={item.id}>
-                <span className="trace-node" />
-                <div>
-                  <time>{item.at}</time>
-                  <strong>{item.title}</strong>
-                  <p>{item.detail}</p>
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="trace-empty">
-              <ShieldCheck size={24} />
-              <strong>每一步都会留下脉络</strong>
-              <span>模型调用、任务结果和异常会在这里变得可见。</span>
+          <details className="agent-roster">
+            <summary className="agent-roster-heading">
+              <span>参与的 Agent</span>
+              <small>{Object.keys(agentUnits).length}</small>
+              <ChevronDown size={14} />
+            </summary>
+            <div className="agent-roster-list">
+              {Object.values(agentUnits).map((unit) => (
+                <details key={unit.agent}>
+                  <summary>
+                    <span className={`agent-state ${unit.kind}`} />
+                    <div>
+                      <strong>{unit.agent}</strong>
+                      <small>{unit.action}</small>
+                    </div>
+                    <time>{unit.at}</time>
+                  </summary>
+                  <p>{unit.detail}</p>
+                  {!!unit.outputs.length && (
+                    <div className="agent-output">
+                      <span>阶段产出</span>
+                      {unit.outputs.map((output, index) => (
+                        <pre key={`${unit.agent}-${index}`}>{output}</pre>
+                      ))}
+                    </div>
+                  )}
+                </details>
+              ))}
             </div>
-          )}
-        </div>
-        </div>
-        <div className="trace-proof">
-          <ShieldCheck size={17} />
-          <span><strong>AgentOS Evidence</strong><small>结果有证据，才算完成</small></span>
+          </details>
+        )}
+        <details className="trace-history">
+          <summary>
+            <span>运行记录</span>
+            <small>{activity.length || 0}</small>
+            <ChevronDown size={14} />
+          </summary>
+          <div className="trace-events">
+            {activity.length ? (
+              activity.map((item) => (
+                <div className={`trace-item ${item.state}`} key={item.id}>
+                  <span className="trace-node" />
+                  <div>
+                    <time>{item.at}</time>
+                    <strong>{item.title}</strong>
+                    <p>{item.detail}</p>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="trace-empty">
+                <ShieldCheck size={24} />
+                <strong>还没有运行记录</strong>
+              </div>
+            )}
+          </div>
+        </details>
         </div>
       </aside>
 
@@ -3460,6 +3988,21 @@ function MainApp() {
               </section>
             )}
 
+            <section className="agent-launch-materials">
+              <div>
+                <span>任务资料</span>
+                <strong>文件只需上传一次，所有步骤共同使用</strong>
+                <small>图片、Word、PDF、表格和其他资料可以一起添加；也可以只填写文字后直接开始。</small>
+              </div>
+              <button type="button" onClick={() => void chooseAttachments()}>
+                <Paperclip size={16} />
+                {attachments.length ? `继续添加（已有 ${attachments.length} 个）` : "添加文件"}
+              </button>
+              {!!attachments.length && (
+                <p>{attachments.map((item) => item.name).join(" · ")}</p>
+              )}
+            </section>
+
             <section className="agent-launch-steps">
               {agentLaunchGuide.onboarding.steps.map((step, index) => (
                 <article className="agent-launch-step" key={step.id}>
@@ -3467,18 +4010,10 @@ function MainApp() {
                   <div className="agent-launch-step-content">
                     <header>
                       <strong>{step.title}</strong>
-                      <span>{step.required ? "开始所需" : "有则更准"}</span>
+                      <span>{step.required ? "建议提供" : "可选"}</span>
                     </header>
                     <p>{step.description}</p>
-                    {step.kind === "attachment" ? (
-                      <div className="agent-launch-attachment">
-                        <button type="button" onClick={() => void chooseAttachments()}>
-                          <Paperclip size={16} />
-                          {attachments.length ? `已添加 ${attachments.length} 个文件` : step.placeholder || "添加资料"}
-                        </button>
-                        {!!attachments.length && <small>{attachments.map((item) => item.name).join(" · ")}</small>}
-                      </div>
-                    ) : step.kind === "select" ? (
+                    {step.kind === "select" ? (
                       <select
                         value={agentLaunchValues[step.id] || ""}
                         onChange={(event) => setAgentLaunchValues((values) => ({
@@ -3493,7 +4028,9 @@ function MainApp() {
                       <textarea
                         rows={2}
                         value={agentLaunchValues[step.id] || ""}
-                        placeholder={step.placeholder}
+                        placeholder={step.kind === "attachment"
+                          ? "可以用一句话说明；文件请使用上方统一入口添加"
+                          : step.placeholder}
                         onChange={(event) => setAgentLaunchValues((values) => ({
                           ...values,
                           [step.id]: event.target.value
@@ -3512,10 +4049,10 @@ function MainApp() {
 
             {agentLaunchError && <div className="agent-launch-error">{agentLaunchError}</div>}
 
-            <section className="agent-launch-outcomes">
+            {!!agentLaunchGuide.onboarding.outcomes.length && <section className="agent-launch-outcomes">
               <header>
                 <div><span>最后一步</span><strong>你想先得到什么？</strong></div>
-                <small>选择后会生成可继续编辑的任务，不会立即扣费执行。</small>
+                <small>选中后立即进入任务；涉及桌面、发布或其他新权限时，NOVA 会再单独询问。</small>
               </header>
               <div>
                 {agentLaunchGuide.onboarding.outcomes.map((outcome, index) => (
@@ -3523,19 +4060,30 @@ function MainApp() {
                     type="button"
                     className={index === 0 ? "recommended" : ""}
                     key={outcome.id}
-                    onClick={() => useAgentLaunchOutcome(outcome.id)}
+                    onClick={() => void useAgentLaunchOutcome(outcome.id)}
                   >
                     <strong>{outcome.title}</strong>
                     <span>{outcome.description}</span>
-                    <b>{index === 0 ? "推荐起点" : "生成任务"}</b>
+                    <b>{index === 0 ? "推荐并启动" : "立即启动"}</b>
                   </button>
                 ))}
               </div>
-            </section>
+            </section>}
 
             <footer>
               <span>资料不完整不会阻止开始；NOVA 会降低结论级别，并告诉你下一份最值得收集的证据。</span>
-              <button type="button" onClick={() => setAgentLaunchOpen(false)}>先自己描述</button>
+              <div className="agent-launch-footer-actions">
+                <button type="button" onClick={() => setAgentLaunchOpen(false)}>返回对话</button>
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={running}
+                  onClick={() => void useAgentLaunchOutcome(agentLaunchGuide.onboarding?.outcomes[0]?.id)}
+                >
+                  <Send size={15} />
+                  {running ? "当前任务执行中" : "开始执行"}
+                </button>
+              </div>
             </footer>
           </div>
         </div>
@@ -3558,6 +4106,7 @@ function MainApp() {
                 ["skills", "Skills", BrainCircuit],
                 ["knowledge", "知识库", BookOpen],
                 ["growth", "成长", Sparkles],
+                ["permissions", "权限", ShieldCheck],
                 ["gateway", "服务接口", Webhook],
                 ["ssh", "SSH", Terminal],
                 ["cloud", "云开发", Cloud],
@@ -3575,6 +4124,7 @@ function MainApp() {
                     if (id === "agents") void loadAgentPacks();
                     if (id === "knowledge") void loadKnowledge();
                     if (id === "growth") void loadGrowthState();
+                    if (id === "permissions") void loadWorkspacePermissions();
                     if (id === "ssh" || id === "cloud" || id === "gateway") {
                       void loadExtensionProfiles();
                     }
@@ -3595,6 +4145,7 @@ function MainApp() {
                     {settingsSection === "skills" && "Skills"}
                     {settingsSection === "knowledge" && "知识库"}
                     {settingsSection === "growth" && "成长与桌面"}
+                    {settingsSection === "permissions" && "工作区授权"}
                     {settingsSection === "gateway" && "服务接口"}
                     {settingsSection === "ssh" && "SSH 工作区"}
                     {settingsSection === "cloud" && "云开发适配器"}
@@ -3607,6 +4158,8 @@ function MainApp() {
                         ? "把当前工作区的资料变成可检索、可追溯的本地知识，不会自动上传到外部服务。"
                         : settingsSection === "gateway"
                           ? "让你授权的本机网页或微服务只读订阅 NOVA 任务、交付物与实时事件。"
+                        : settingsSection === "permissions"
+                          ? "查看和撤销长期授权。终端权限只对指定工作区生效，高风险命令始终需要再次确认。"
                         : "只显示真实状态；安装、启用和外部访问都需要明确确认。"}
                   </p>
                 </div>
@@ -3966,9 +4519,18 @@ function MainApp() {
                         </header>
                         <p>{pack.description}</p>
                         <div className="agent-pack-facts">
-                          <span>{pack.agentCount} 个角色</span>
-                          <span>{pack.workflowCount} 条主流程</span>
-                          <span>{pack.declaredCapabilities.length} 项能力</span>
+                          <span title={pack.roleNames.join("、")}>
+                            <strong>{pack.agentCount} 个角色</strong>
+                            <small>{pack.roleNames.join("、") || "尚未声明角色"}</small>
+                          </span>
+                          <span title={pack.workflowNames.join("、")}>
+                            <strong>{pack.workflowStepCount} 步工作流</strong>
+                            <small>{pack.workflowNames.join("、") || "尚未声明工作流"}</small>
+                          </span>
+                          <span title={pack.capabilityNames.join("、")}>
+                            <strong>{pack.capabilityNames.length} 项核心能力</strong>
+                            <small>{pack.capabilityNames.join("、") || "使用 NOVA 基础能力"}</small>
+                          </span>
                         </div>
                         <footer>
                           <button type="button" onClick={() => void inspectAgentPack(pack.id)}>查看结构</button>
@@ -4191,6 +4753,8 @@ function MainApp() {
                       placeholder={
                         provider === "ollama"
                           ? "本地 Ollama 通常无需密钥"
+                          : connected[provider]
+                            ? "已安全保存；留空可继续使用原凭据"
                           : `输入 ${providerLabels[provider]} API Key`
                       }
                     />
@@ -4198,7 +4762,7 @@ function MainApp() {
                   <div className="security-note">
                     <ShieldCheck size={17} />
                     <span>
-                      密钥只在本次主进程内存中使用；远程接口强制 HTTPS，本机与局域网模型可使用 HTTP。
+                      API Key 由操作系统加密后保存在本机，不会回传到界面或写入日志；远程接口强制 HTTPS。
                     </span>
                   </div>
                   <div className="modal-actions">
@@ -4208,7 +4772,7 @@ function MainApp() {
                         !model.trim() ||
                         ((provider === "ollama" || provider === "custom")
                           ? !modelEndpoint.trim()
-                          : apiKey.trim().length < 12)
+                          : !connected[provider] && apiKey.trim().length < 12)
                       }
                     >
                       验证并连接
@@ -5110,6 +5674,58 @@ function MainApp() {
                 </div>
               )}
 
+              {settingsSection === "permissions" && (
+                <div className="workspace-permissions-panel">
+                  <section className="permission-boundary-card">
+                    <ShieldCheck size={22} />
+                    <div>
+                      <strong>授权跟着工作区，不跟着整台电脑</strong>
+                      <small>普通终端命令可以长期信任；提权、系统修改、批量删除和下载后执行仍会逐次询问。</small>
+                    </div>
+                    {!!workspacePermissions.length && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await window.nova.permissions.clear({});
+                          await loadWorkspacePermissions();
+                          setNotice("已撤销全部长期工作区授权");
+                        }}
+                      >
+                        撤销全部
+                      </button>
+                    )}
+                  </section>
+                  <div className="workspace-permission-list">
+                    {!workspacePermissions.length && (
+                      <div className="empty-dock-state">
+                        <ShieldCheck size={24} />
+                        <strong>还没有长期授权</strong>
+                        <span>终端请求出现时，你可以选择“以后在这个工作区内自动允许”。</span>
+                      </div>
+                    )}
+                    {workspacePermissions.map((grant) => (
+                      <article key={grant.id}>
+                        <div>
+                          <strong>{grant.workspaceLabel}</strong>
+                          <code>{grant.permissionKey}</code>
+                          <small>{grant.workspaceRoot} · {grant.platform === "macos" ? "macOS" : grant.platform === "windows" ? "Windows" : "Linux"}</small>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await window.nova.permissions.revoke({ id: grant.id });
+                            await loadWorkspacePermissions();
+                            setNotice(`已撤销 ${grant.workspaceLabel} 的这项授权`);
+                          }}
+                        >
+                          撤销
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {settingsSection === "gateway" && (
                 <div className="gateway-panel">
                   <section className="gateway-status-card">
@@ -5454,6 +6070,25 @@ function MainApp() {
         </div>
       )}
 
+      {imagePreview && (
+        <div
+          className="image-preview-layer"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setImagePreview(null);
+          }}
+        >
+          <figure>
+            <header>
+              <strong>{imagePreview.name}</strong>
+              <button type="button" onClick={() => setImagePreview(null)} aria-label="关闭图片预览">
+                <X size={18} />
+              </button>
+            </header>
+            <img src={imagePreview.dataUrl} alt={imagePreview.name} />
+          </figure>
+        </div>
+      )}
+
       {newTaskGuideOpen && (
         <div
           className="modal-layer new-task-guide-layer"
@@ -5645,17 +6280,44 @@ function MainApp() {
                 <pre>{pendingToolApproval.preview}</pre>
               </details>
             )}
-            <label className="approval-remember">
-              <input
-                type="checkbox"
-                checked={rememberToolPermission}
-                onChange={(event) => setRememberToolPermission(event.target.checked)}
-              />
-              <span>
-                <strong>本任务内相同能力不再询问</strong>
-                <small>只记住这一项能力，不会扩大到其他工具、任务或工作区。</small>
-              </span>
-            </label>
+            {pendingToolApproval.canRememberForTask !== false && (
+              <label className="approval-remember">
+                <input
+                  type="checkbox"
+                  checked={rememberToolPermission}
+                  onChange={(event) => {
+                    setRememberToolPermission(event.target.checked);
+                    if (event.target.checked) setRememberWorkspacePermission(false);
+                  }}
+                />
+                <span>
+                  <strong>本任务内相同能力不再询问</strong>
+                  <small>只记住这一项能力，不会扩大到其他工具、任务或工作区。</small>
+                </span>
+              </label>
+            )}
+            {pendingToolApproval.canPersistForWorkspace && !pendingToolApproval.requiresExplicitApproval && (
+              <label className="approval-remember workspace-trust">
+                <input
+                  type="checkbox"
+                  checked={rememberWorkspacePermission}
+                  onChange={(event) => {
+                    setRememberWorkspacePermission(event.target.checked);
+                    if (event.target.checked) setRememberToolPermission(false);
+                  }}
+                />
+                <span>
+                  <strong>以后在这个工作区内自动允许</strong>
+                  <small>只记住当前文件夹和这类能力；高风险命令仍会再次询问。</small>
+                </span>
+              </label>
+            )}
+            {pendingToolApproval.requiresExplicitApproval && (
+              <div className="approval-risk-warning">
+                <strong>这一步必须单独确认</strong>
+                <span>涉及提权、系统位置、批量删除或下载后执行，不能加入长期授权。</span>
+              </div>
+            )}
             <div className="tool-approval-actions">
               <button type="button" onClick={() => void resolveToolApproval(false)}>拒绝这一步</button>
               <button type="button" className="primary" onClick={() => void resolveToolApproval(true)}>
@@ -5676,7 +6338,7 @@ function MainApp() {
           <div className="delivery-review-modal">
             <header>
               <div>
-                <span>交付审查台</span>
+                <span>查看交付物</span>
                 <h2>{deliveryReview.title}</h2>
                 {deliveryReview.path && <small>{deliveryReview.path}</small>}
               </div>
@@ -5712,14 +6374,14 @@ function MainApp() {
                     className={deliveryReviewMode === "rework" ? "active" : ""}
                     onClick={() => setDeliveryReviewMode("rework")}
                   >
-                    只修改本次结果
+                    修改这次结果
                   </button>
                   <button
                     type="button"
                     className={deliveryReviewMode === "calibrate" ? "active" : ""}
                     onClick={() => setDeliveryReviewMode("calibrate")}
                   >
-                    校准 {selectedAgentPack.name}
+                    改进这个 Agent
                   </button>
                 </div>
               )}
@@ -5756,7 +6418,7 @@ function MainApp() {
                 </div>
               )}
               <label>
-                <span>{deliveryReviewMode === "calibrate" ? "以后应该怎样处理" : "审查意见"}</span>
+                <span>{deliveryReviewMode === "calibrate" ? "以后希望它怎样做" : "你希望怎么改"}</span>
                 <textarea
                   value={deliveryReviewNote}
                   onChange={(event) => setDeliveryReviewNote(event.target.value)}
@@ -5899,7 +6561,7 @@ function MainApp() {
             </dl>
             <p>
               {pendingStoreItem.kind === "mcp"
-                ? "MCP 只会先登记并保持停用，不会立即启动进程或访问账号。"
+                ? "确认后会登记并启用此 MCP。涉及账号登录、外部写入或高风险动作时，NOVA 仍会再次请求授权。"
                 : "NOVA 只下载并校验 SKILL.md 文本；不从商店安装二进制和可执行脚本。"}
             </p>
             <div className="archive-confirm-actions">

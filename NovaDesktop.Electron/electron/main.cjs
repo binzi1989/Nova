@@ -4,6 +4,7 @@ const {
   clipboard,
   dialog,
   ipcMain,
+  safeStorage,
   screen,
   session,
   shell
@@ -13,6 +14,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const http = require("node:http");
+const os = require("node:os");
 const readline = require("node:readline");
 
 const isDev = !app.isPackaged;
@@ -25,14 +27,35 @@ const isGatewaySmoke =
 const isKnowledgeWindowSmoke =
   process.argv.includes("--smoke-knowledge-window")
   || app.commandLine.hasSwitch("smoke-knowledge-window");
+const isCredentialSmoke =
+  process.argv.includes("--smoke-credentials")
+  || app.commandLine.hasSwitch("smoke-credentials");
 const isSmoke =
   isWorkshopRecoverySmoke
   || isGatewaySmoke
   || isKnowledgeWindowSmoke
+  || isCredentialSmoke
   || process.argv.includes("--smoke")
   || app.commandLine.hasSwitch("smoke");
-if (isSmoke) app.disableHardwareAcceleration();
+// A subset of Windows Intel/virtual display drivers can lose Electron's GPU
+// process during a large task-view repaint. Chromium then leaves a completely
+// white BrowserWindow even though the task continues in the AgentOS host.
+// NOVA favours task reliability over GPU compositing on Windows; macOS keeps
+// native acceleration and animations.
+if (isSmoke || process.platform === "win32") {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("disable-gpu");
+  app.commandLine.appendSwitch("disable-gpu-compositing");
+}
+const credentialSmokeUserData = isCredentialSmoke
+  ? path.join(os.tmpdir(), `nova-credential-smoke-${process.pid}-${crypto.randomUUID()}`)
+  : "";
+if (credentialSmokeUserData) {
+  fs.mkdirSync(credentialSmokeUserData, { recursive: true });
+  app.setPath("userData", credentialSmokeUserData);
+}
 const modelConnections = new Map();
+const MODEL_CONNECTION_STORE_VERSION = 1;
 const approvedAttachments = new Set();
 const approvedWorkspaceRoots = new Set();
 const cancelledRuns = new Set();
@@ -208,6 +231,27 @@ function recordWorkshopFailure(request, error) {
     // Diagnostics must never replace the original model failure.
   }
   return id;
+}
+
+function recordRendererFailure(source, error, extra = {}) {
+  try {
+    const logDirectory = path.join(app.getPath("userData"), "logs");
+    fs.mkdirSync(logDirectory, { recursive: true });
+    const logPath = path.join(logDirectory, "renderer-errors.jsonl");
+    fs.appendFileSync(
+      logPath,
+      `${JSON.stringify({
+        at: new Date().toISOString(),
+        source: String(source || "renderer"),
+        message: safeError(error).slice(0, 2400),
+        ...extra
+      })}\n`,
+      "utf8"
+    );
+    return logPath;
+  } catch {
+    return "";
+  }
 }
 
 function workshopSessionStorePath() {
@@ -1054,6 +1098,99 @@ function modelDefaults(provider) {
   };
 }
 
+function modelConnectionStorePath() {
+  return path.join(app.getPath("userData"), "secure-model-connections.json");
+}
+
+function publicModelConnections() {
+  return Array.from(modelConnections.values()).map((connection) => ({
+    provider: connection.provider,
+    model: connection.model,
+    endpoint: connection.endpoint,
+    connected: true,
+    hasCredential: Boolean(connection.apiKey)
+  }));
+}
+
+function persistModelConnections() {
+  const records = [];
+  for (const connection of modelConnections.values()) {
+    let protectedApiKey = "";
+    if (connection.apiKey) {
+      if (!safeStorage.isEncryptionAvailable()) {
+        return {
+          persisted: false,
+          warning: "系统安全存储暂不可用；本次连接有效，但重启后需要重新输入 API Key。"
+        };
+      }
+      protectedApiKey = safeStorage.encryptString(connection.apiKey).toString("base64");
+    }
+    records.push({
+      provider: connection.provider,
+      model: connection.model,
+      endpoint: connection.endpoint,
+      protectedApiKey
+    });
+  }
+
+  const storePath = modelConnectionStorePath();
+  const temporaryPath = `${storePath}.${process.pid}.tmp`;
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  try {
+    fs.writeFileSync(temporaryPath, JSON.stringify({
+      version: MODEL_CONNECTION_STORE_VERSION,
+      connections: records
+    }), { encoding: "utf8", mode: 0o600 });
+    fs.copyFileSync(temporaryPath, storePath);
+    try {
+      fs.chmodSync(storePath, 0o600);
+    } catch {
+      // Windows protects the encrypted value with DPAPI; POSIX mode hardening is best effort.
+    }
+    return { persisted: true, warning: "" };
+  } finally {
+    if (fs.existsSync(temporaryPath)) {
+      try { fs.unlinkSync(temporaryPath); } catch { /* best-effort cleanup */ }
+    }
+  }
+}
+
+function restoreModelConnections() {
+  const storePath = modelConnectionStorePath();
+  if (!fs.existsSync(storePath)) return [];
+  let payload;
+  try {
+    payload = JSON.parse(fs.readFileSync(storePath, "utf8"));
+  } catch (error) {
+    console.error(`[Model Credentials] 配置读取失败：${safeError(error)}`);
+    return [];
+  }
+  if (Number(payload?.version) !== MODEL_CONNECTION_STORE_VERSION
+      || !Array.isArray(payload?.connections)) return [];
+
+  for (const record of payload.connections) {
+    try {
+      const provider = String(record?.provider || "");
+      validateProvider(provider);
+      let apiKey = "";
+      if (record?.protectedApiKey) {
+        if (!safeStorage.isEncryptionAvailable()) continue;
+        apiKey = safeStorage.decryptString(Buffer.from(String(record.protectedApiKey), "base64"));
+      }
+      const normalized = normalizeModelConfiguration({
+        provider,
+        model: record?.model,
+        endpoint: record?.endpoint,
+        apiKey
+      });
+      modelConnections.set(provider, normalized);
+    } catch (error) {
+      console.error(`[Model Credentials] 跳过无法恢复的连接：${safeError(error)}`);
+    }
+  }
+  return publicModelConnections();
+}
+
 function validateProvider(provider) {
   if (!["openai", "deepseek", "kimi", "ollama", "custom"].includes(provider)) {
     throw new Error("不支持的模型提供方。");
@@ -1220,47 +1357,48 @@ function documentTypeFor(filePath) {
 function readApprovedAttachments(attachments = []) {
   let totalBytes = 0;
   return attachments.map((item) => {
-    if (!item?.path || !approvedAttachments.has(item.path)) {
+    const attachmentPath = item?.path ? path.resolve(item.path) : "";
+    if (!attachmentPath || !approvedAttachments.has(attachmentPath)) {
       throw new Error("附件未通过本次系统选择授权。");
     }
-    const stat = fs.statSync(item.path);
+    const stat = fs.statSync(attachmentPath);
     if (!stat.isFile()) throw new Error("附件不是有效文件。");
     totalBytes += stat.size;
     if (totalBytes > 20 * 1024 * 1024) throw new Error("附件总大小不能超过 20 MB。");
 
-    const documentMime = documentTypeFor(item.path);
+    const documentMime = documentTypeFor(attachmentPath);
     if (documentMime) {
       if (stat.size > 12 * 1024 * 1024) {
         throw new Error("单个 PDF 或 Word 文档不能超过 12 MB。");
       }
       return {
         id: item.id,
-        name: path.basename(item.path),
-        path: item.path,
+        name: path.basename(attachmentPath),
+        path: attachmentPath,
         kind: "document",
         mime: documentMime
       };
     }
 
-    const mime = contentTypeFor(item.path);
+    const mime = contentTypeFor(attachmentPath);
     if (mime) {
       if (stat.size > 10 * 1024 * 1024) throw new Error("单张图片不能超过 10 MB。");
       return {
         id: item.id,
-        name: path.basename(item.path),
-        path: item.path,
+        name: path.basename(attachmentPath),
+        path: attachmentPath,
         kind: "image",
         mime,
-        data: fs.readFileSync(item.path).toString("base64")
+        data: fs.readFileSync(attachmentPath).toString("base64")
       };
     }
     if (stat.size > 1024 * 1024) throw new Error("单个文本附件不能超过 1 MB。");
     return {
       id: item.id,
-      name: path.basename(item.path),
-      path: item.path,
+      name: path.basename(attachmentPath),
+      path: attachmentPath,
       kind: "text",
-      text: fs.readFileSync(item.path, "utf8")
+      text: fs.readFileSync(attachmentPath, "utf8")
     };
   });
 }
@@ -2095,6 +2233,10 @@ function buildAgentWorkshopRuntimePrompt(request) {
     "AgentOS Supervisor 会先附上行业架构师、工作流架构师和信任审查官的真实子 Agent 产出；必须交叉综合这些产出，不要重复创建第二组 Agent。",
     "三名子 Agent 在并行阶段彼此不可见；忽略任何关于‘没有看到其他子 Agent 产出’的抱怨，你现在收到的工作组上下文才是完整汇总。",
     "子 Agent 只能进行只读分析；不要修改用户工程，不要执行命令，不要假装拥有用户未提供的事实。",
+    "你只负责输出可供用户审阅的智能体设计草案，不负责生成、写入、安装或注册 Agent Pack 文件。",
+    "禁止自行发明 manifest.json、契约.json、工作流.json、注册记录.json 或‘已注册’状态；这些都不是 NOVA 的可加载格式。",
+    "用户确认草案后，NOVA Pack 编译器会固定生成 nova.industry.json、agent-card.json、delivery-contract.json、标准目录与 certification.json，并通过真实注册服务安装。",
+    "reviewVerdict 只表示设计草案是否可进入编译阶段，绝不表示 Agent Pack 已落盘、已安装或已启用。",
     "最终只输出一个 JSON 对象，不要 Markdown、解释文字或代码围栏。",
     "JSON 契约：",
     '{"summary":"...","designRationale":["..."],"roles":[{"id":"lowercase-role-id","name":"...","responsibility":"...","deliverables":["..."]}],"workflow":[{"order":1,"title":"...","owner":"角色id","output":"真实文件或结构化成果","acceptance":["可检查条件"]}],"requiredInputs":["..."],"recommendedInputs":["..."],"starterPrompts":["..."],"risks":["..."],"reviewVerdict":"approved或revise"}',
@@ -2119,6 +2261,7 @@ function buildAgentWorkshopRepairPrompt(request, output, stageOutputs, parseErro
     "[NOVA_AGENT_DRAFT_REPAIR]",
     "你是 NOVA Agent Creation Council 的最终编排委员。前三名真实子 Agent 已经完成分析；本轮不要创建任何新 Agent。",
     "主协调输出存在 JSON 截断或语法错误。请综合下面的真实产出并修复结构，不得改成模板、不得删除行业信息、不得声称资料未返回。",
+    "本轮仍然只修复设计 JSON；禁止生成文件清单、伪造注册记录或声称 Agent Pack 已安装。真正的 Pack 只能由用户确认后的 NOVA Pack 编译器生成。",
     "只输出一个完整合法的 JSON 对象，不要 Markdown、代码围栏或解释。",
     "JSON 契约：",
     '{"summary":"...","designRationale":["..."],"roles":[{"id":"lowercase-role-id","name":"...","responsibility":"...","deliverables":["..."]}],"workflow":[{"order":1,"title":"...","owner":"角色id","output":"真实文件或结构化成果","acceptance":["可检查条件"]}],"requiredInputs":["..."],"recommendedInputs":["..."],"starterPrompts":["..."],"risks":["..."],"reviewVerdict":"approved或revise"}',
@@ -2641,7 +2784,29 @@ async function runModel(request) {
   const workspaceBefore = snapshotWorkspace(workspaceRoot);
   const runId = String(request?.runId || crypto.randomUUID());
   let taskId;
+  let taskSettled = false;
   activeRuns.set(runId, null);
+
+  const settleCancelledTask = async () => {
+    if (!taskId || taskSettled) return;
+    try {
+      await bridge.call("cancel_task", { taskId });
+    } catch {
+      // The runtime may already have observed cancellation. The partial
+      // completion below is the authoritative task-lease cleanup.
+    }
+    try {
+      await bridge.call("complete_task", {
+        taskId,
+        succeeded: true,
+        outcome: "partial",
+        detail: "用户已安全停止；上下文、已完成文件和交付结果均已保留，可继续任务。"
+      });
+      taskSettled = true;
+    } catch {
+      // Recovery boot can still reclaim the lease after an abnormal bridge exit.
+    }
+  };
 
   try {
     const task = await bridge.call("start_task", {
@@ -2665,6 +2830,7 @@ async function runModel(request) {
       executionMode: request?.executionMode || "Build"
     });
     if (cancelledRuns.has(runId)) {
+      await settleCancelledTask();
       throw new Error("NOVA_RUN_CANCELLED");
     }
     const result = await bridge.call("run_agent", {
@@ -2681,6 +2847,13 @@ async function runModel(request) {
         mime: item.mime || null
       }))
     });
+    // Cancellation can arrive just as the provider finishes a response. Do not
+    // let that stale response win the race and become a delivery after the user
+    // has already redirected the task.
+    if (cancelledRuns.has(runId)) {
+      await settleCancelledTask();
+      throw new Error("NOVA_RUN_CANCELLED");
+    }
     const output = String(result.output || "");
     const artifacts = collectDeliveryArtifacts(
       workspaceRoot,
@@ -2818,6 +2991,7 @@ async function runModel(request) {
       draft: persistedDraft,
       delivery
     });
+    taskSettled = true;
     for (const artifact of artifacts) {
       publishGatewayHook("artifact.created", {
         taskId,
@@ -2847,15 +3021,17 @@ async function runModel(request) {
     };
   } catch (error) {
     if (cancelledRuns.delete(runId)) {
+      await settleCancelledTask();
       throw new Error("NOVA_RUN_CANCELLED");
     }
-    if (taskId) {
+    if (taskId && !taskSettled) {
       try {
         await bridge.call("complete_task", {
           taskId,
           succeeded: false,
           detail: safeError(error)
         });
+        taskSettled = true;
       } catch {
         // The original model error remains the useful user-facing failure.
       }
@@ -3130,6 +3306,20 @@ function createWindow() {
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    recordRendererFailure("render-process-gone", details?.reason || "renderer exited", {
+      exitCode: details?.exitCode,
+      reason: details?.reason
+    });
+  });
+  mainWindow.webContents.on("unresponsive", () => {
+    recordRendererFailure("renderer-unresponsive", "The main renderer stopped responding.");
+  });
+  mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
+    recordRendererFailure("did-fail-load", `${errorCode}: ${errorDescription}`, {
+      url: String(validatedURL || "").slice(0, 500)
+    });
+  });
   mainWindow.webContents.on("before-input-event", (event, input) => {
     if (!(input.control || input.meta) || input.type !== "keyDown") return;
     const key = input.key.toLowerCase();
@@ -3207,8 +3397,18 @@ function registerIpc() {
         kimi: modelDefaults("kimi"),
         ollama: modelDefaults("ollama"),
         custom: modelDefaults("custom")
-      }
+      },
+      modelConnections: publicModelConnections()
     };
+  });
+  ipcMain.handle("nova:report-renderer-error", (event, request) => {
+    requireMainWindow(event);
+    const message = [request?.message, request?.stack, request?.componentStack]
+      .filter(Boolean)
+      .join("\n")
+      .slice(0, 12000);
+    const logPath = recordRendererFailure(request?.source || "renderer", message);
+    return { recorded: Boolean(logPath), logPath };
   });
   ipcMain.handle("nova:list-tasks", () => bridge.call("list_tasks"));
   ipcMain.handle("nova:list-archived-tasks", () => bridge.call("list_archived_tasks"));
@@ -3216,6 +3416,16 @@ function registerIpc() {
     senderWindow(event);
     const detail = await bridge.call("get_task", { taskId: request?.taskId });
     rememberWorkspace(detail?.task?.workspaceRoot);
+    for (const attachment of detail?.task?.attachments || []) {
+      const attachmentPath = String(attachment?.path || "");
+      if (!attachmentPath) continue;
+      try {
+        if (fs.statSync(attachmentPath).isFile()) approvedAttachments.add(path.resolve(attachmentPath));
+      } catch {
+        // A moved task attachment remains visible by name, but is not authorized
+        // for preview or reuse until the user selects it again.
+      }
+    }
     return detail;
   });
   ipcMain.handle("nova:get-task-capsule", async (event, request) => {
@@ -3289,6 +3499,48 @@ function registerIpc() {
     rememberWorkspace(result.filePaths[0]);
     return result.filePaths[0];
   });
+  ipcMain.handle("nova:check-workspace-access", (event, request) => {
+    senderWindow(event);
+    const rawPath = String(request?.workspace || "").trim();
+    if (!rawPath) {
+      return { exists: false, readable: false, writable: false, reason: "尚未选择任务文件夹" };
+    }
+    const requestedPath = path.resolve(rawPath);
+    if (!fs.existsSync(requestedPath) || !fs.statSync(requestedPath).isDirectory()) {
+      return { exists: false, readable: false, writable: false, reason: "工作区不存在或已经移动" };
+    }
+    let readable = false;
+    let writable = false;
+    let reason = "";
+    try {
+      fs.accessSync(requestedPath, fs.constants.R_OK);
+      readable = true;
+    } catch (error) {
+      reason = safeError(error);
+    }
+    let probePath = "";
+    try {
+      fs.accessSync(requestedPath, fs.constants.W_OK);
+      probePath = path.join(
+        requestedPath,
+        `.nova-write-check-${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString("hex")}.tmp`
+      );
+      fs.writeFileSync(probePath, "NOVA workspace write check", { flag: "wx" });
+      writable = true;
+    } catch (error) {
+      reason = reason || safeError(error);
+    } finally {
+      if (probePath && fs.existsSync(probePath)) {
+        try {
+          fs.unlinkSync(probePath);
+        } catch {
+          // A successful create/write probe is authoritative. Antivirus may hold
+          // the temporary file briefly; cleanup failure must not mark the folder read-only.
+        }
+      }
+    }
+    return { exists: true, readable, writable, reason };
+  });
   ipcMain.handle("nova:select-attachments", async (event) => {
     const result = await dialog.showOpenDialog(senderWindow(event), {
       title: "添加任务附件",
@@ -3327,7 +3579,7 @@ function registerIpc() {
     });
     if (result.canceled) return [];
     return result.filePaths.slice(0, 6).map((filePath) => {
-      approvedAttachments.add(filePath);
+      approvedAttachments.add(path.resolve(filePath));
       const stat = fs.statSync(filePath);
       return {
         id: crypto.randomUUID(),
@@ -3342,9 +3594,31 @@ function registerIpc() {
       };
     });
   });
+  ipcMain.handle("nova:preview-attachment", async (event, request) => {
+    senderWindow(event);
+    const requestedPath = path.resolve(String(request?.path || ""));
+    if (!approvedAttachments.has(requestedPath)) {
+      throw new Error("该图片尚未获得本任务的预览授权。");
+    }
+    const mediaType = contentTypeFor(requestedPath);
+    if (!mediaType) throw new Error("该附件不是支持预览的图片。");
+    const stat = fs.statSync(requestedPath);
+    if (!stat.isFile()) throw new Error("图片不存在或已经移动。");
+    if (stat.size > 10 * 1024 * 1024) throw new Error("单张图片预览不能超过 10 MB。");
+    return {
+      name: path.basename(requestedPath),
+      mediaType,
+      dataUrl: `data:${mediaType};base64,${fs.readFileSync(requestedPath).toString("base64")}`
+    };
+  });
   ipcMain.handle("nova:configure-model", async (event, configuration) => {
     senderWindow(event);
-    const normalized = normalizeModelConfiguration(configuration);
+    const requestedProvider = String(configuration?.provider || "");
+    const existingConnection = modelConnections.get(requestedProvider);
+    const normalized = normalizeModelConfiguration({
+      ...configuration,
+      apiKey: String(configuration?.apiKey || "").trim() || existingConnection?.apiKey || ""
+    });
     const discoveredModels = await probeModelConnection(normalized);
     if (normalized.provider === "ollama") {
       if (!discoveredModels.length) {
@@ -3364,34 +3638,51 @@ function registerIpc() {
       }
     }
     modelConnections.set(normalized.provider, normalized);
+    const storage = persistModelConnections();
     return {
       provider: normalized.provider,
       connected: true,
       model: normalized.model,
       endpoint: normalized.endpoint,
-      discoveredModels
+      discoveredModels,
+      persisted: storage.persisted,
+      warning: storage.warning
     };
   });
   ipcMain.handle("nova:run-model", (event, request) => {
     senderWindow(event);
     return runModel(request);
   });
-  ipcMain.handle("nova:cancel-model", (event, request) => {
+  ipcMain.handle("nova:cancel-model", async (event, request) => {
     senderWindow(event);
     const runId = String(request?.runId || "");
     if (!runId || !activeRuns.has(runId)) return { cancelled: false };
     cancelledRuns.add(runId);
     const taskId = activeRuns.get(runId);
-    if (!taskId) return { cancelled: true };
-    return bridge.call("cancel_task", { taskId });
+    if (!taskId) return { cancelled: true, stopping: true };
+    const result = await bridge.call("cancel_task", { taskId });
+    return { ...result, cancelled: true, stopping: true };
   });
   ipcMain.handle("nova:resolve-tool-approval", (event, request) => {
     senderWindow(event);
     return bridge.call("resolve_tool_approval", {
       approvalId: request?.approvalId,
       approved: request?.approved === true,
-      rememberForTask: request?.rememberForTask === true
+      rememberForTask: request?.rememberForTask === true,
+      rememberForWorkspace: request?.rememberForWorkspace === true
     });
+  });
+  ipcMain.handle("nova:list-workspace-permissions", (event) => {
+    senderWindow(event);
+    return bridge.call("list_workspace_permissions");
+  });
+  ipcMain.handle("nova:revoke-workspace-permission", (event, request) => {
+    senderWindow(event);
+    return bridge.call("revoke_workspace_permission", { id: request?.id });
+  });
+  ipcMain.handle("nova:clear-workspace-permissions", (event, request) => {
+    senderWindow(event);
+    return bridge.call("clear_workspace_permissions", { workspace: request?.workspace || null });
   });
   ipcMain.handle("nova:list-capabilities", (event, request) => {
     senderWindow(event);
@@ -3430,6 +3721,70 @@ function registerIpc() {
       workspaceRoot: request?.workspace || process.cwd()
     });
   });
+  ipcMain.handle("nova:authorize-agent-capabilities", async (event, request) => {
+    const owner = senderWindow(event);
+    const packId = String(request?.packId || "");
+    const workspaceRoot = request?.workspace || process.cwd();
+    if (!packId) throw new Error("没有选择需要补全能力的 Agent。");
+    let report = await bridge.call("get_agent_pack_capabilities", {
+      id: packId,
+      workspaceRoot
+    });
+    const required = Array.isArray(report?.items)
+      ? report.items.filter((item) => item.required === true && item.state !== "ready")
+      : [];
+    if (!required.length) return { canceled: false, report, changed: [] };
+    const automatic = required.filter((item) =>
+      (item.state === "available" && item.catalogId)
+      || (item.state === "registered-disabled" && item.matchedId)
+    );
+    const unresolved = required.filter((item) => !automatic.includes(item));
+    if (!automatic.length) return { canceled: false, report, changed: [], unresolved };
+    const preview = automatic.map((item) =>
+      `• ${item.name}：${item.state === "available" ? "登记本地能力" : "启用已登记能力"}\n  ${item.reason || "Agent 契约要求"}`
+    ).join("\n");
+    const confirmation = await dialog.showMessageBox(owner, {
+      type: "warning",
+      title: "允许 NOVA 补全必要能力？",
+      message: `这个 Agent 缺少 ${automatic.length} 项执行所必需的能力。`,
+      detail: `${preview}\n\nNOVA 只处理上面列出的能力，不会安装未列出的软件。MCP 启用后可能访问对应服务，真实工具调用仍受任务权限策略约束。`,
+      buttons: ["不用 MCP 继续", "允许补全必要能力"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true
+    });
+    if (confirmation.response !== 1) return { canceled: true, report, changed: [], unresolved };
+    const changed = [];
+    for (const item of automatic) {
+      if (item.state === "available" && item.catalogId) {
+        await bridge.call("install_capability", { id: item.catalogId, workspaceRoot });
+        changed.push({ id: item.id, action: "installed" });
+      }
+      if (item.kind === "mcp") {
+        const refreshed = await bridge.call("get_agent_pack_capabilities", {
+          id: packId,
+          workspaceRoot
+        });
+        const current = refreshed?.items?.find((candidate) => candidate.id === item.id);
+        if (current?.matchedId) {
+          await bridge.call("set_mcp_enabled", { name: current.matchedId, enabled: true });
+          changed.push({ id: item.id, action: "enabled" });
+        }
+      } else {
+        const refreshed = await bridge.call("get_agent_pack_capabilities", {
+          id: packId,
+          workspaceRoot
+        });
+        const current = refreshed?.items?.find((candidate) => candidate.id === item.id);
+        if (current?.matchedId && current.state === "registered-disabled") {
+          await bridge.call("set_skill_enabled", { id: current.matchedId, enabled: true });
+          changed.push({ id: item.id, action: "enabled" });
+        }
+      }
+    }
+    report = await bridge.call("get_agent_pack_capabilities", { id: packId, workspaceRoot });
+    return { canceled: false, report, changed, unresolved };
+  });
   ipcMain.handle("nova:search-capability-store", (event, request) => {
     senderWindow(event);
     return bridge.call("search_capability_store", {
@@ -3437,9 +3792,14 @@ function registerIpc() {
       query: request?.query || ""
     });
   });
-  ipcMain.handle("nova:install-store-capability", (event, request) => {
+  ipcMain.handle("nova:install-store-capability", async (event, request) => {
     senderWindow(event);
-    return bridge.call("install_store_capability", { id: request?.id });
+    const installed = await bridge.call("install_store_capability", { id: request?.id });
+    if (request?.enable === true && installed?.kind === "mcp" && installed?.name) {
+      await bridge.call("set_mcp_enabled", { name: installed.name, enabled: true });
+      return { ...installed, enabled: true };
+    }
+    return installed;
   });
   ipcMain.handle("nova:discover-mcp", async (event, request) => {
     const owner = senderWindow(event);
@@ -3587,21 +3947,39 @@ function registerIpc() {
     });
   });
   ipcMain.handle("nova:install-agent-pack", async (event) => {
-    const result = await dialog.showOpenDialog(senderWindow(event), {
+    const owner = senderWindow(event);
+    const sourceChoice = await dialog.showMessageBox(owner, {
+      type: "question",
       title: "导入 NOVA Agent Pack",
-      message: "选择包含 nova.industry.json 的文件夹",
-      properties: ["openDirectory"]
+      message: "你的 Agent Pack 是哪种形式？",
+      detail: "可以选择包含 nova.industry.json 的文件夹，也可以直接选择 NOVA 导出的 ZIP 包。",
+      buttons: ["取消", "选择文件夹", "选择 ZIP 包"],
+      defaultId: 1,
+      cancelId: 0,
+      noLink: true
+    });
+    if (sourceChoice.response === 0) return { canceled: true, pack: null };
+    const selectingZip = sourceChoice.response === 2;
+    const result = await dialog.showOpenDialog(owner, {
+      title: selectingZip ? "选择 Agent Pack ZIP" : "选择 Agent Pack 文件夹",
+      message: selectingZip
+        ? "选择 NOVA 导出的 .zip 文件"
+        : "可以选择包目录，也可以选择包目录的上一层",
+      properties: selectingZip ? ["openFile"] : ["openDirectory"],
+      filters: selectingZip
+        ? [{ name: "NOVA Agent Pack", extensions: ["zip"] }]
+        : undefined
     });
     if (result.canceled || !result.filePaths[0]) {
       return { canceled: true, pack: null };
     }
-    const confirmation = await dialog.showMessageBox(senderWindow(event), {
+    const confirmation = await dialog.showMessageBox(owner, {
       type: "question",
       title: "导入专业 Agent",
-      message: `将 ${path.basename(result.filePaths[0])} 导入 NOVA 的 Agent 扩展坞吗？`,
+      message: `将“${path.basename(result.filePaths[0])}”导入 NOVA 吗？`,
       detail:
-        "NOVA 只复制声明、角色、工作流、知识和交付模板；不会执行包内代码，也不会自动授予模型、网络或桌面权限。导入后仍需手动启用。",
-      buttons: ["取消", "安全导入"],
+        "NOVA 会先检查包结构和路径安全，再复制角色、工作流、知识与交付模板。不会执行包内代码，也不会自动授予模型、网络或桌面权限。重复导入同一 Agent 会安全更新本地副本。",
+      buttons: ["取消", "检查并导入"],
       defaultId: 0,
       cancelId: 0,
       noLink: true
@@ -3906,6 +4284,7 @@ function createBridgeClient() {
 app.whenReady().then(async () => {
   if (!ownsInstance) return;
   bridge = createBridgeClient();
+  restoreModelConnections();
   try {
     await startExtensionGateway(isSmoke);
   } catch (error) {
@@ -3940,6 +4319,40 @@ app.whenReady().then(async () => {
     } catch (error) {
       console.error(`NOVA_KNOWLEDGE_WINDOW_SMOKE_FAILED: ${safeError(error)}`);
       bridge.stop();
+      process.exit(1);
+    }
+    return;
+  }
+
+  if (isCredentialSmoke) {
+    try {
+      if (!safeStorage.isEncryptionAvailable()) {
+        throw new Error("系统安全存储不可用。");
+      }
+      modelConnections.set("deepseek", normalizeModelConfiguration({
+        provider: "deepseek",
+        model: modelDefaults("deepseek").model,
+        endpoint: modelDefaults("deepseek").endpoint,
+        apiKey: "sk-nova-credential-smoke-secret"
+      }));
+      const result = persistModelConnections();
+      if (!result.persisted) throw new Error(result.warning);
+      modelConnections.clear();
+      restoreModelConnections();
+      const restored = modelConnections.get("deepseek");
+      const rawStore = fs.readFileSync(modelConnectionStorePath(), "utf8");
+      if (restored?.apiKey !== "sk-nova-credential-smoke-secret"
+          || rawStore.includes("sk-nova-credential-smoke-secret")) {
+        throw new Error("模型凭据加密持久化契约失败。");
+      }
+      console.log("NOVA_MODEL_CREDENTIAL_SMOKE_OK");
+      bridge.stop();
+      try { fs.rmSync(credentialSmokeUserData, { recursive: true, force: true }); } catch { }
+      process.exit(0);
+    } catch (error) {
+      console.error(`NOVA_MODEL_CREDENTIAL_SMOKE_FAILED: ${safeError(error)}`);
+      bridge.stop();
+      try { fs.rmSync(credentialSmokeUserData, { recursive: true, force: true }); } catch { }
       process.exit(1);
     }
     return;

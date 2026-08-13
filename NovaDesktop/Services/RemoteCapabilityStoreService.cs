@@ -119,6 +119,7 @@ public sealed class RemoteCapabilityStoreService
             {
                 id,
                 kind = "mcp",
+                name = target.McpRegistration.Name,
                 installed = true,
                 enabled = false,
                 message = "已登记到 MCP，保持停用；请审阅权限并补齐凭证后再启用。"

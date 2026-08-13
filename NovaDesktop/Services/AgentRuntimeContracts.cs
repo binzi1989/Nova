@@ -54,7 +54,11 @@ public sealed record ToolApprovalRequest(
     string PreviewKind = "arguments",
     string? ChangePreview = null,
     int Additions = 0,
-    int Deletions = 0);
+    int Deletions = 0,
+    string Risk = "standard",
+    string? PermissionKey = null,
+    bool CanPersistForWorkspace = false,
+    bool RequiresExplicitApproval = false);
 
 public sealed record AgentRunResult(
     string ResponseId,

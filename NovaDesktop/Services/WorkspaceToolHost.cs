@@ -50,6 +50,12 @@ public sealed class WorkspaceToolHost
     private readonly string _taskId;
     private readonly IReadOnlyList<string>? _allowedWriteScopes;
     private readonly TextPatchPreviewService _patchPreview = new();
+    private readonly object _webInteractionGate = new();
+    private long _webObservationVersion;
+    private string? _webObservationFingerprint;
+    private string? _lastWebActionSignature;
+    private long _lastWebActionObservationVersion;
+    private string? _observationBeforeLastWebAction;
 
     public WorkspaceToolHost(
         string workspaceRoot,
@@ -100,6 +106,33 @@ public sealed class WorkspaceToolHost
                         ["objective"] = StringProperty("Current task objective or capability question.")
                     },
                     ["required"] = new JsonArray("objective"),
+                    ["additionalProperties"] = false
+                }),
+            Function(
+                "plan_web_interaction",
+                "Choose the safest and most reliable route for a web task before opening or controlling a browser. Detects enabled semantic browser MCP servers and returns a step-by-step verification contract.",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["objective"] = StringProperty("What must be learned or accomplished on the website."),
+                        ["url"] = StringProperty("Known absolute page URL, or an empty string when it is not known yet."),
+                        ["operation"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["description"] = "One of: research, navigate, interact, login, upload, download.",
+                            ["enum"] = new JsonArray("research", "navigate", "interact", "login", "upload", "download")
+                        },
+                        ["requires_visible_session"] = BooleanProperty("True when the user must see or use an existing signed-in browser session."),
+                        ["changes_external_state"] = BooleanProperty("True for submit, publish, purchase, send, delete, or any other remote mutation.")
+                    },
+                    ["required"] = new JsonArray(
+                        "objective",
+                        "url",
+                        "operation",
+                        "requires_visible_session",
+                        "changes_external_state"),
                     ["additionalProperties"] = false
                 }),
             Function(
@@ -509,6 +542,22 @@ public sealed class WorkspaceToolHost
                 },
                 ["required"] = new JsonArray("executable", "arguments"),
                 ["additionalProperties"] = false
+            }),
+        Function(
+            "run_workspace_shell",
+            "Run a command through the native terminal in the active workspace. On Windows use PowerShell/cmd; on macOS use zsh/bash. Always requires approval unless this workspace and terminal were explicitly trusted. Privilege escalation, system paths, destructive commands, and download-then-execute actions always require a fresh approval.",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["shell"] = StringProperty("Terminal: auto, powershell, pwsh, cmd, zsh, or bash."),
+                    ["command"] = StringProperty("Exact command to run. Prefer workspace-relative paths and non-interactive commands."),
+                    ["reason"] = StringProperty("Short user-facing reason this terminal command is needed."),
+                    ["timeout_seconds"] = IntegerProperty("Execution timeout from 30 to 1800 seconds. Use a realistic value for builds, tests, media rendering, or installs.")
+                },
+                ["required"] = new JsonArray("shell", "command", "reason", "timeout_seconds"),
+                ["additionalProperties"] = false
             })
     ];
 
@@ -516,6 +565,7 @@ public sealed class WorkspaceToolHost
         => toolName is "write_text_file"
             or "replace_text_in_file"
             or "run_workspace_command"
+            or "run_workspace_shell"
             or "fetch_public_web_page"
             or "inspect_mcp_server_tools"
             or "call_mcp_tool"
@@ -545,7 +595,11 @@ public sealed class WorkspaceToolHost
                 toolName,
                 $"允许运行 {arguments["executable"]?.GetValue<string>() ?? "本机命令"}？",
                 "命令不会通过 shell 执行，只允许预设的开发命令，并被限制在当前工作区。",
-                preview),
+                preview,
+                Risk: "low",
+                PermissionKey: DevelopmentCommandPermissionKey(arguments),
+                CanPersistForWorkspace: true),
+            "run_workspace_shell" => CreateShellApproval(arguments, preview),
             "fetch_public_web_page" => new ToolApprovalRequest(
                 toolName,
                 $"允许后台读取 {GetSafeWebHost(arguments)}？",
@@ -608,6 +662,29 @@ public sealed class WorkspaceToolHost
                 preview),
             _ => new ToolApprovalRequest(toolName, "允许执行本机工具？", "此工具需要你的确认。", preview)
         };
+    }
+
+    private static ToolApprovalRequest CreateShellApproval(JsonObject arguments, string preview)
+    {
+        var assessment = WorkspaceShellPolicy.Assess(
+            arguments["shell"]?.GetValue<string>() ?? "auto",
+            RequireString(arguments, "command"));
+        return new ToolApprovalRequest(
+            "run_workspace_shell",
+            $"允许通过 {assessment.Shell} 执行终端命令？",
+            assessment.Summary,
+            preview,
+            Risk: assessment.Risk,
+            PermissionKey: assessment.PermissionKey,
+            CanPersistForWorkspace: assessment.CanPersistForWorkspace,
+            RequiresExplicitApproval: assessment.RequiresExplicitApproval);
+    }
+
+    private static string DevelopmentCommandPermissionKey(JsonObject arguments)
+    {
+        var executable = arguments["executable"]?.GetValue<string>()?.Trim().ToLowerInvariant() ?? "command";
+        var firstArgument = arguments["arguments"]?.AsArray().FirstOrDefault()?.GetValue<string>()?.Trim().ToLowerInvariant() ?? "run";
+        return $"development:{executable}:{firstArgument}";
     }
 
     private static string GetSafeWebHost(JsonObject arguments)
@@ -834,6 +911,7 @@ public sealed class WorkspaceToolHost
         try
         {
             EnsureWriteOwnership(toolName, arguments);
+            EnsureWebInteractionCanProceed(toolName, arguments);
             if (IsMutatingTool(toolName, arguments))
             {
                 var resolvedOperationId = string.IsNullOrWhiteSpace(operationId)
@@ -878,10 +956,12 @@ public sealed class WorkspaceToolHost
                 "write_text_file" => await WriteTextFileAsync(arguments, cancellationToken),
                 "replace_text_in_file" => await ReplaceTextInFileAsync(arguments, cancellationToken),
                 "run_workspace_command" => await RunWorkspaceCommandAsync(arguments, cancellationToken),
+                "run_workspace_shell" => await RunWorkspaceShellAsync(arguments, cancellationToken),
                 "recommend_task_capabilities" => JsonSerializer.Serialize(
                     _capabilityCompass.Analyze(
                         RequireString(arguments, "objective"),
                         _workspaceRoot)),
+                "plan_web_interaction" => PlanWebInteraction(arguments),
                 "fetch_public_web_page" => await _backgroundResearch.FetchPublicPageAsync(
                     RequireString(arguments, "url"),
                     cancellationToken),
@@ -943,6 +1023,7 @@ public sealed class WorkspaceToolHost
                         arguments),
                 _ => JsonSerializer.Serialize(new { error = $"Unknown tool: {toolName}" })
             };
+            TrackWebInteractionResult(toolName, arguments, result);
             actionReturned = true;
             if (sideEffect is not null)
             {
@@ -1014,6 +1095,160 @@ public sealed class WorkspaceToolHost
 
         var path = ResolvePath(relativePath, mustExist: false);
         return SideEffectReceiptService.ComputeFingerprint(path);
+    }
+
+    private string PlanWebInteraction(JsonObject arguments)
+    {
+        var objective = RequireString(arguments, "objective");
+        var url = arguments["url"]?.GetValue<string>()?.Trim() ?? string.Empty;
+        var operation = RequireString(arguments, "operation").Trim().ToLowerInvariant();
+        var requiresVisibleSession = arguments["requires_visible_session"]?.GetValue<bool>() ?? false;
+        var changesExternalState = arguments["changes_external_state"]?.GetValue<bool>() ?? false;
+        var enabledServers = _mcpRegistry.GetEnabledServers();
+        var semanticServers = enabledServers
+            .Where(server =>
+            {
+                var descriptor = string.Join(' ', server.Name, server.Command, server.Url ?? string.Empty, string.Join(' ', server.Arguments));
+                return descriptor.Contains("playwright", StringComparison.OrdinalIgnoreCase)
+                       || descriptor.Contains("browser", StringComparison.OrdinalIgnoreCase)
+                       || descriptor.Contains("chrome", StringComparison.OrdinalIgnoreCase);
+            })
+            .Select(server => server.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var sessionServers = semanticServers
+            .Where(name => name.Contains("chrome", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        var isBackgroundResearch = operation == "research"
+                                   && !requiresVisibleSession
+                                   && !changesExternalState;
+        string route;
+        string readiness;
+        string? server = null;
+        string[] tools;
+        string[] steps;
+        string limitation;
+
+        if (isBackgroundResearch)
+        {
+            route = "background_http";
+            readiness = "ready";
+            tools = ["fetch_public_web_page"];
+            steps =
+            [
+                "确认精确的公开 HTTPS 页面地址",
+                "在后台读取正文，不打开本地浏览器",
+                "交叉核对来源、发布日期与关键事实",
+                "把来源贴近结论并标出未知项"
+            ];
+            limitation = "不读取登录态、不提交表单、不访问 localhost 或内网地址。";
+        }
+        else if (requiresVisibleSession && sessionServers.Length > 0)
+        {
+            route = "semantic_existing_session";
+            readiness = "ready";
+            server = sessionServers[0];
+            tools = ["inspect_mcp_server_tools", "call_mcp_tool"];
+            steps =
+            [
+                $"检查 {server} 的页面观察与交互工具",
+                "先识别并处理遮挡目标的广告、Cookie 提示、订阅弹窗或模态框",
+                "读取当前页面的语义结构并定位目标控件",
+                "判断目标由点击、悬停、菜单展开还是键盘导航触发，再执行一个最小动作",
+                "重新读取页面结构，验证状态变化后再继续",
+                "若页面无变化，禁止重复同一动作；重新观察并改用悬停、展开菜单或键盘导航",
+                "提交、发布、发送、购买或删除前单独确认"
+            ];
+            limitation = "现有登录会话只能在用户已授权的浏览器连接中使用。";
+        }
+        else if (semanticServers.Length > 0 && !requiresVisibleSession)
+        {
+            route = "semantic_browser_mcp";
+            readiness = "ready";
+            server = semanticServers[0];
+            tools = ["inspect_mcp_server_tools", "call_mcp_tool"];
+            steps =
+            [
+                $"检查 {server} 的工具和参数",
+                "先读取页面快照，识别广告、Cookie 条、订阅弹窗、对话框与其他遮挡层",
+                "关闭可安全关闭的遮挡层；涉及同意条款、隐私选择或付费内容时先确认",
+                "用页面结构、可访问名称或稳定选择器定位控件",
+                "判断控件需要点击、悬停、菜单展开还是键盘导航，再执行一个最小动作",
+                "重新读取页面状态并核对预期结果",
+                "页面无变化时重新观察并更换交互方式，禁止重复盲点或猜坐标"
+            ];
+            limitation = "隔离浏览器默认不继承用户个人浏览器的登录态。";
+        }
+        else
+        {
+            route = "desktop_visual_fallback";
+            readiness = "degraded";
+            tools = ["recommend_task_capabilities", "list_desktop_windows", "activate_desktop_window", "click_window_point"];
+            steps =
+            [
+                "先请求推荐并启用 Playwright 或受控 Chrome MCP",
+                "若任务必须使用当前可见会话，列出并确认目标窗口",
+                "先检查是否存在广告、Cookie 条或模态框遮挡目标区域",
+                "每次只执行一个有明确名称和预期结果的动作",
+                "点击没有改变页面时禁止再次点击同一点；应改用悬停、Tab 导航或请求语义浏览器能力",
+                "每步后重新观察窗口；状态不明时立即停止，不连续猜坐标"
+            ];
+            limitation = "当前没有已启用的语义浏览器能力；桌面坐标无法理解 DOM，仅可作为低可靠性兜底。";
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            objective,
+            url,
+            operation,
+            preferred_route = route,
+            readiness,
+            semantic_server = server,
+            available_semantic_servers = semanticServers,
+            tools,
+            steps,
+            verification_contract = new
+            {
+                observe_before_action = true,
+                resolve_blocking_overlays_first = true,
+                infer_click_hover_or_menu_trigger = true,
+                inspect_iframes_and_shadow_roots = true,
+                track_tabs_windows_and_navigation = true,
+                wait_for_spa_and_network_settle = true,
+                preserve_upload_and_download_receipts = true,
+                one_action_per_step = true,
+                verify_after_action = true,
+                retry_without_new_observation = false,
+                repeat_unchanged_action = false,
+                maximum_strategy_changes = 3,
+                success_requires_observable_evidence = true,
+                external_mutation_requires_confirmation = changesExternalState
+            },
+            state_machine = new[]
+            {
+                "observe: read URL, title, accessibility tree, visible dialogs and active tab",
+                "unblock: dismiss safe ads, cookie notices and overlays; ask before consent choices",
+                "locate: search main document, iframe, shadow root, menu, popover and newly opened tab",
+                "act: choose click, hover, focus, keyboard, upload or navigation from control semantics",
+                "settle: wait for DOM, URL, tab, download or network state to stabilize",
+                "verify: compare the expected predicate with a fresh observation",
+                "recover: change strategy after no progress; never repeat the unchanged action",
+                "handoff: stop precisely at CAPTCHA, MFA, payment, destructive action or missing permission"
+            },
+            recovery_policy = new
+            {
+                safe_overlay_dismissal = "automatic",
+                expired_login = "request the user to restore the session, then resume from the saved step",
+                captcha_or_mfa = "human handoff without losing task state",
+                unexpected_new_tab = "switch to the new tab, observe it, and continue only if it matches the objective",
+                iframe_or_shadow_dom = "inspect the nested semantic context before falling back to keyboard navigation",
+                download = "verify filename, completion and local existence before claiming success",
+                upload = "verify the selected file name appears in the page before submitting",
+                no_progress = "re-observe and change strategy up to three times, then report the exact blocker"
+            },
+            limitation
+        });
     }
 
     private string ListWorkspaceFiles(JsonObject arguments)
@@ -1251,6 +1486,82 @@ public sealed class WorkspaceToolHost
             stdout = Limit(output, 40000),
             stderr = Limit(error, 20000)
         });
+    }
+
+    private async Task<string> RunWorkspaceShellAsync(JsonObject arguments, CancellationToken cancellationToken)
+    {
+        var command = RequireString(arguments, "command");
+        var timeoutSeconds = Math.Clamp(arguments["timeout_seconds"]?.GetValue<int>() ?? 300, 30, 1800);
+        var assessment = WorkspaceShellPolicy.Assess(
+            arguments["shell"]?.GetValue<string>() ?? "auto",
+            command);
+        var startInfo = CreateShellStartInfo(assessment.Shell, command);
+        startInfo.WorkingDirectory = _workspaceRoot;
+        startInfo.UseShellExecute = false;
+        startInfo.RedirectStandardOutput = true;
+        startInfo.RedirectStandardError = true;
+        startInfo.CreateNoWindow = true;
+        startInfo.Environment["NOVA_WORKSPACE_ROOT"] = _workspaceRoot;
+
+        using var process = new Process { StartInfo = startInfo };
+        process.Start();
+        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            if (cancellationToken.IsCancellationRequested) throw;
+            throw new TimeoutException($"The terminal command exceeded its {timeoutSeconds} second execution limit.");
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            shell = assessment.Shell,
+            risk = assessment.Risk,
+            timeout_seconds = timeoutSeconds,
+            exit_code = process.ExitCode,
+            stdout = Limit(await outputTask, 40000),
+            stderr = Limit(await errorTask, 20000)
+        });
+    }
+
+    private static ProcessStartInfo CreateShellStartInfo(string shell, string command)
+    {
+        var startInfo = new ProcessStartInfo();
+        switch (shell)
+        {
+            case "cmd":
+                startInfo.FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
+                startInfo.ArgumentList.Add("/d");
+                startInfo.ArgumentList.Add("/s");
+                startInfo.ArgumentList.Add("/c");
+                startInfo.ArgumentList.Add(command);
+                break;
+            case "powershell":
+            case "pwsh":
+                startInfo.FileName = shell == "powershell" ? "powershell.exe" : "pwsh";
+                startInfo.ArgumentList.Add("-NoLogo");
+                startInfo.ArgumentList.Add("-NoProfile");
+                startInfo.ArgumentList.Add("-NonInteractive");
+                startInfo.ArgumentList.Add("-Command");
+                startInfo.ArgumentList.Add(command);
+                break;
+            case "zsh":
+            case "bash":
+                startInfo.FileName = Path.Combine("/bin", shell);
+                startInfo.ArgumentList.Add("-lc");
+                startInfo.ArgumentList.Add(command);
+                break;
+            default:
+                throw new InvalidOperationException($"Unsupported terminal: {shell}");
+        }
+        return startInfo;
     }
 
     private string ResolvePath(string relativePath, bool mustExist)
@@ -1494,32 +1805,35 @@ public sealed class WorkspaceToolHost
 
     private string ResolveExecutable(string executable)
     {
-        var executableName = executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
-            ? executable
-            : executable + ".exe";
+        var executableNames = OperatingSystem.IsWindows()
+            ? new[] { executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? executable : executable + ".exe", executable }
+            : new[] { executable };
         var pathEntries = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         foreach (var entry in pathEntries)
         {
-            string candidate;
-            try
+            foreach (var executableName in executableNames)
             {
-                candidate = Path.GetFullPath(Path.Combine(entry, executableName));
-            }
-            catch
-            {
-                continue;
-            }
+                string candidate;
+                try
+                {
+                    candidate = Path.GetFullPath(Path.Combine(entry, executableName));
+                }
+                catch
+                {
+                    continue;
+                }
 
-            if (candidate.StartsWith(_workspacePrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
+                if (candidate.StartsWith(_workspacePrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
 
-            if (File.Exists(candidate))
-            {
-                return candidate;
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
             }
         }
 
@@ -1592,6 +1906,73 @@ public sealed class WorkspaceToolHost
             or NotSupportedException
             or System.Security.SecurityException;
 
+    private void EnsureWebInteractionCanProceed(string toolName, JsonObject arguments)
+    {
+        if (!IsWebAction(toolName, arguments)) return;
+        var signature = WebActionSignature(toolName, arguments);
+        lock (_webInteractionGate)
+        {
+            if (_lastWebActionSignature is not null
+                && _webObservationVersion <= _lastWebActionObservationVersion)
+            {
+                throw new InvalidOperationException(
+                    "网页保护已阻止连续盲操作：上一步后还没有新的页面观察。请先重新读取页面结构或窗口状态，再决定点击、悬停、展开菜单或键盘导航。");
+            }
+            if (string.Equals(signature, _lastWebActionSignature, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(_observationBeforeLastWebAction)
+                && string.Equals(_webObservationFingerprint, _observationBeforeLastWebAction, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "网页保护检测到页面没有变化，已阻止再次执行同一动作。请检查广告、Cookie 条、弹窗或悬停菜单，并改用新的交互策略。");
+            }
+        }
+    }
+
+    private void TrackWebInteractionResult(string toolName, JsonObject arguments, string result)
+    {
+        lock (_webInteractionGate)
+        {
+            if (IsWebObservation(toolName, arguments))
+            {
+                _webObservationVersion++;
+                _webObservationFingerprint = Convert.ToHexString(
+                    SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(result))).ToLowerInvariant();
+            }
+            if (!IsWebAction(toolName, arguments)) return;
+            _lastWebActionSignature = WebActionSignature(toolName, arguments);
+            _lastWebActionObservationVersion = _webObservationVersion;
+            _observationBeforeLastWebAction = _webObservationFingerprint;
+        }
+    }
+
+    private static bool IsWebObservation(string toolName, JsonObject arguments)
+    {
+        if (toolName is "plan_web_interaction" or "list_desktop_windows" or "fetch_public_web_page") return true;
+        if (toolName != "call_mcp_tool") return false;
+        var name = arguments["tool"]?.GetValue<string>() ?? string.Empty;
+        return ContainsAny(name, "snapshot", "screenshot", "observe", "accessibility", "content", "read", "get", "list", "tabs");
+    }
+
+    private static bool IsWebAction(string toolName, JsonObject arguments)
+    {
+        if (toolName is "open_browser_url" or "activate_desktop_window" or "type_text_to_window" or "send_window_key" or "click_window_point")
+        {
+            return true;
+        }
+        if (toolName != "call_mcp_tool") return false;
+        var name = arguments["tool"]?.GetValue<string>() ?? string.Empty;
+        return ContainsAny(
+            name,
+            "click", "hover", "type", "fill", "press", "select", "upload", "download", "navigate", "goto",
+            "close", "dismiss", "submit", "send", "delete", "drag", "drop", "check", "uncheck");
+    }
+
+    private static bool ContainsAny(string source, params string[] values)
+        => values.Any(value => source.Contains(value, StringComparison.OrdinalIgnoreCase));
+
+    private static string WebActionSignature(string toolName, JsonObject arguments)
+        => $"{toolName}:{arguments.ToJsonString(new JsonSerializerOptions { WriteIndented = false })}";
+
     private static string DescribeEvidenceTarget(string toolName, JsonObject arguments)
     {
         if (toolName == "run_workspace_command")
@@ -1601,6 +1982,11 @@ public sealed class WorkspaceToolHost
                 .Select(item => item?.GetValue<string>() ?? string.Empty)
                 .ToArray() ?? [];
             return Limit($"{executable} {string.Join(' ', commandArguments)}".Trim(), 500);
+        }
+
+        if (toolName == "run_workspace_shell")
+        {
+            return Limit($"{arguments["shell"]?.GetValue<string>() ?? "auto"}: {arguments["command"]?.GetValue<string>() ?? string.Empty}", 500);
         }
 
         var target = arguments["path"]?.GetValue<string>()
@@ -1625,6 +2011,8 @@ public sealed class WorkspaceToolHost
                 ?.Equals("dotnet", StringComparison.OrdinalIgnoreCase) == true;
         }
 
+        if (toolName == "run_workspace_shell") return true;
+
         return toolName is "write_text_file"
             or "replace_text_in_file"
             or "call_mcp_tool"
@@ -1640,7 +2028,7 @@ public sealed class WorkspaceToolHost
 
     private static int? TryReadExitCode(string toolName, string output)
     {
-        if (toolName != "run_workspace_command")
+        if (toolName is not ("run_workspace_command" or "run_workspace_shell"))
         {
             return null;
         }

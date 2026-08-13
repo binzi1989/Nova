@@ -10,6 +10,7 @@ public static class AgentExecutionPolicy
         "write_text_file",
         "replace_text_in_file",
         "run_workspace_command",
+        "run_workspace_shell",
         "inspect_mcp_server_tools",
         "activate_desktop_window",
         "open_browser_url",

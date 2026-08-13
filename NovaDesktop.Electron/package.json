@@ -1,6 +1,6 @@
 {
   "name": "nova-agentos-electron",
-  "version": "1.1.0-preview.15",
+  "version": "1.1.0-preview.17",
   "private": true,
   "author": "NOVA AgentOS Project",
   "description": "NOVA AgentOS next-generation desktop shell",
@@ -25,6 +25,7 @@
     "smoke:workshop": "electron . --smoke-workshop-recovery",
     "smoke:bridge": "node scripts/smoke-bridge.mjs",
     "smoke:context": "resources\\bridge\\Nova.AgentOS.Bridge.exe --smoke-context",
+    "smoke:credentials": "electron . --smoke-credentials",
     "smoke:cli": "node scripts/smoke-cli.mjs"
   },
   "dependencies": {
@@ -104,6 +105,10 @@
     },
     "mac": {
       "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "target": [
         {
           "target": "zip",

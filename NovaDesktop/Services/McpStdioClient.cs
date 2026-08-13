@@ -24,6 +24,8 @@ public sealed class McpStdioClient : IMcpClientSession
         _stderrDrain = DrainStderrAsync(process.StandardError);
     }
 
+    public bool IsAlive => !_process.HasExited;
+
     public static async Task<McpStdioClient> ConnectAsync(
         McpServerRegistration server,
         string workspaceRoot,

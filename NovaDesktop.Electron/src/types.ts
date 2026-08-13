@@ -91,6 +91,7 @@ export interface AgentTask {
   agentPackId?: string | null;
   executionMode?: string;
   hasResult?: boolean;
+  attachments?: Attachment[];
 }
 
 export interface CapabilityState {
@@ -152,6 +153,10 @@ export interface AgentPackSummary {
   starterPrompts: string[];
   agentCount: number;
   workflowCount: number;
+  workflowStepCount: number;
+  roleNames: string[];
+  workflowNames: string[];
+  capabilityNames: string[];
 }
 
 export interface AgentCreationTemplate {
@@ -655,6 +660,13 @@ export interface BootInfo {
     servicesTotal?: number;
   };
   defaults: Record<Provider, { model: string; endpoint: string }>;
+  modelConnections: Array<{
+    provider: Provider;
+    model: string;
+    endpoint: string;
+    connected: boolean;
+    hasCredential: boolean;
+  }>;
 }
 
 export interface ExtensionGatewayState {
@@ -756,6 +768,23 @@ export interface ToolApprovalRequestEvent {
   description: string;
   preview: string;
   scope: "workspace" | "desktop" | "external";
+  risk?: "low" | "standard" | "workspace" | "high";
+  permissionKey?: string;
+  canRememberForTask?: boolean;
+  canPersistForWorkspace?: boolean;
+  requiresExplicitApproval?: boolean;
+}
+
+export interface WorkspacePermissionGrant {
+  id: string;
+  workspaceRoot: string;
+  workspaceLabel: string;
+  permissionKey: string;
+  toolName: string;
+  description: string;
+  platform: "windows" | "macos" | "linux";
+  createdAt: string;
+  lastUsedAt: string;
 }
 
 export interface NovaApi {
@@ -793,8 +822,25 @@ export interface NovaApi {
     }): Promise<DeliveryProof>;
     acceptDelivery(request: { taskId: string }): Promise<DeliveryProof>;
     selectWorkspace(): Promise<string | null>;
+    checkWorkspaceAccess(request: { workspace: string }): Promise<{
+      exists: boolean;
+      readable: boolean;
+      writable: boolean;
+      reason: string;
+    }>;
     selectAttachments(): Promise<Attachment[]>;
+    previewAttachment(request: { path: string }): Promise<{
+      name: string;
+      mediaType: string;
+      dataUrl: string;
+    }>;
     desktopSnapshot(): Promise<DesktopSnapshot>;
+    reportRendererError(request: {
+      source: "error-boundary" | "window-error" | "unhandled-rejection";
+      message: string;
+      stack?: string;
+      componentStack?: string;
+    }): Promise<{ recorded: boolean; logPath?: string }>;
     onContextEvent(listener: (event: ContextEvent) => void): () => void;
   };
   model: {
@@ -809,6 +855,8 @@ export interface NovaApi {
       model: string;
       endpoint: string;
       discoveredModels: string[];
+      persisted: boolean;
+      warning: string;
     }>;
     run(request: {
       provider: Provider;
@@ -835,20 +883,35 @@ export interface NovaApi {
       approvalId: string;
       approved: boolean;
       rememberForTask: boolean;
+      rememberForWorkspace: boolean;
     }): Promise<{ resolved: boolean; approved?: boolean; expired?: boolean }>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
     onApprovalRequest(listener: (event: ToolApprovalRequestEvent) => void): () => void;
+  };
+  permissions: {
+    list(): Promise<WorkspacePermissionGrant[]>;
+    revoke(request: { id: string }): Promise<{ revoked: boolean }>;
+    clear(request: { workspace?: string | null }): Promise<{ removed: number }>;
   };
   capabilities: {
     list(request: { workspace: string | null }): Promise<CapabilityState>;
     setMcpEnabled(request: { name: string; enabled: boolean }): Promise<unknown>;
     setSkillEnabled(request: { id: string; enabled: boolean }): Promise<unknown>;
     install(request: { id: string; workspace: string | null }): Promise<unknown>;
+    authorizeAgentCapabilities(request: {
+      packId: string;
+      workspace: string | null;
+    }): Promise<{
+      canceled: boolean;
+      report: AgentPackCapabilityReport;
+      changed: Array<{ id: string; action: string }>;
+      unresolved: AgentPackCapabilityReport["items"];
+    }>;
     searchStore(request: {
       kind: "all" | "mcp" | "skill";
       query: string;
     }): Promise<CapabilityStoreResult>;
-    installStore(request: { id: string }): Promise<unknown>;
+    installStore(request: { id: string; enable?: boolean }): Promise<unknown>;
     discoverMcp(request: { workspace: string | null }): Promise<McpDiscoveryResult>;
     previewMcpConfig(request: {
       workspace: string | null;

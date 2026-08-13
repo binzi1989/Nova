@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.IO.Compression;
 
 namespace NovaDesktop.Services;
 
@@ -16,7 +17,11 @@ public sealed record AgentPackSummary(
     IReadOnlyList<string> DeclaredCapabilities,
     IReadOnlyList<string> StarterPrompts,
     int AgentCount,
-    int WorkflowCount);
+    int WorkflowCount,
+    int WorkflowStepCount,
+    IReadOnlyList<string> RoleNames,
+    IReadOnlyList<string> WorkflowNames,
+    IReadOnlyList<string> CapabilityNames);
 
 public sealed record AgentPackDetails(
     AgentPackSummary Summary,
@@ -134,10 +139,24 @@ public sealed class AgentPackService
     {
         if (string.IsNullOrWhiteSpace(sourceRoot) || !Directory.Exists(sourceRoot))
         {
-            throw new InvalidOperationException("请选择包含 nova.industry.json 的 Agent Pack 文件夹。");
+            throw new InvalidOperationException("请选择 Agent Pack 文件夹，或使用导入入口选择 ZIP 包。");
         }
 
-        var fullSource = Path.GetFullPath(sourceRoot);
+        var fullSource = ResolveImportRoot(sourceRoot);
+        string? migratedSource = null;
+        if (!File.Exists(Path.Combine(fullSource, "nova.industry.json"))
+            && LegacyAgentPackConverter.CanConvert(fullSource))
+        {
+            Directory.CreateDirectory(_installedRoot);
+            migratedSource = Path.Combine(
+                _installedRoot,
+                $".legacy-migration-{Guid.NewGuid():N}");
+            await LegacyAgentPackConverter.ConvertAsync(
+                fullSource,
+                migratedSource,
+                cancellationToken);
+            fullSource = migratedSource;
+        }
         if (IsReparsePoint(fullSource))
         {
             throw new InvalidOperationException("Agent Pack 根目录不能是链接或重解析目录。");
@@ -147,11 +166,6 @@ public sealed class AgentPackService
             ?? throw new InvalidOperationException("所选目录不是有效的 NOVA Agent Pack。");
         var target = Path.Combine(_installedRoot, sourcePack.Manifest.Id!);
         Directory.CreateDirectory(_installedRoot);
-        if (Directory.Exists(target))
-        {
-            throw new InvalidOperationException(
-                $"Agent Pack {sourcePack.Manifest.Id} 已安装。请先保留当前版本；升级功能将在版本治理中单独确认。");
-        }
 
         var files = EnumerateInstallableFiles(fullSource).ToArray();
         if (files.Length == 0 || files.Length > MaxPackFiles)
@@ -183,7 +197,45 @@ public sealed class AgentPackService
 
             _ = ReadPackDirectory(staging, builtIn: false)
                 ?? throw new InvalidOperationException("复制后的 Agent Pack 未通过完整性校验。");
-            Directory.Move(staging, target);
+
+            // Import is deliberately idempotent. A pack created by NOVA may already
+            // be registered locally; importing it again should refresh the installed
+            // copy instead of failing with an opaque "already installed" error.
+            if (Directory.Exists(target))
+            {
+                if (IsReparsePoint(target))
+                {
+                    throw new InvalidOperationException("现有 Agent Pack 目录是链接，无法安全更新。");
+                }
+                var backup = Path.Combine(
+                    _installedRoot,
+                    $".backup-{sourcePack.Manifest.Id}-{Guid.NewGuid():N}");
+                Directory.Move(target, backup);
+                try
+                {
+                    Directory.Move(staging, target);
+                }
+                catch
+                {
+                    if (!Directory.Exists(target) && Directory.Exists(backup))
+                    {
+                        Directory.Move(backup, target);
+                    }
+                    throw;
+                }
+                try
+                {
+                    Directory.Delete(backup, recursive: true);
+                }
+                catch (IOException)
+                {
+                    // A stale backup is harmless and can be cleaned on a later boot.
+                }
+            }
+            else
+            {
+                Directory.Move(staging, target);
+            }
         }
         catch
         {
@@ -191,12 +243,63 @@ public sealed class AgentPackService
             {
                 Directory.Delete(staging, recursive: true);
             }
+            DeleteDirectoryBestEffort(migratedSource);
             throw;
         }
 
-        return ToSummary(
+        var installedPack = ToSummary(
             ReadPackDirectory(target, builtIn: false)!,
             ReadState());
+        DeleteDirectoryBestEffort(migratedSource);
+        return installedPack;
+    }
+
+    public async Task<AgentPackSummary> InstallFromSourceAsync(
+        string sourcePath,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath))
+        {
+            throw new InvalidOperationException("请选择 Agent Pack 文件夹或 ZIP 包。");
+        }
+        if (Directory.Exists(sourcePath))
+        {
+            return await InstallFromDirectoryAsync(sourcePath, cancellationToken);
+        }
+        if (!File.Exists(sourcePath)
+            || !Path.GetExtension(sourcePath).Equals(".zip", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Agent Pack 导入仅支持文件夹或 .zip 文件。");
+        }
+        if (IsReparsePoint(sourcePath))
+        {
+            throw new InvalidOperationException("Agent Pack ZIP 不能是链接文件。");
+        }
+
+        Directory.CreateDirectory(_installedRoot);
+        var extractionRoot = Path.Combine(
+            _installedRoot,
+            $".import-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(extractionRoot);
+        try
+        {
+            await ExtractZipSafelyAsync(sourcePath, extractionRoot, cancellationToken);
+            return await InstallFromDirectoryAsync(extractionRoot, cancellationToken);
+        }
+        finally
+        {
+            if (Directory.Exists(extractionRoot))
+            {
+                try
+                {
+                    Directory.Delete(extractionRoot, recursive: true);
+                }
+                catch (IOException)
+                {
+                    // Import result is already committed; temporary cleanup can retry later.
+                }
+            }
+        }
     }
 
     public IReadOnlyList<AgentPackSummary> List()
@@ -375,6 +478,137 @@ public sealed class AgentPackService
                       + "\n[Context truncated at the Agent Pack safety limit.]";
     }
 
+    private string ResolveImportRoot(string selectedRoot)
+    {
+        var root = Path.GetFullPath(selectedRoot);
+        if (IsReparsePoint(root))
+        {
+            throw new InvalidOperationException("Agent Pack 根目录不能是链接或重解析目录。");
+        }
+        if (IsImportablePackRoot(root))
+        {
+            return root;
+        }
+
+        var matches = new List<string>();
+        var pending = new Queue<(string Path, int Depth)>();
+        pending.Enqueue((root, 0));
+        var visited = 0;
+        while (pending.Count > 0 && visited < 240)
+        {
+            var (current, depth) = pending.Dequeue();
+            visited++;
+            if (depth >= 4)
+            {
+                continue;
+            }
+            foreach (var directory in Directory.EnumerateDirectories(current))
+            {
+                var name = Path.GetFileName(directory);
+                if (name.StartsWith(".", StringComparison.Ordinal)
+                    || name.Equals("node_modules", StringComparison.OrdinalIgnoreCase)
+                    || name.Equals("bin", StringComparison.OrdinalIgnoreCase)
+                    || name.Equals("obj", StringComparison.OrdinalIgnoreCase)
+                    || name.Equals("__MACOSX", StringComparison.OrdinalIgnoreCase)
+                    || IsReparsePoint(directory))
+                {
+                    continue;
+                }
+                if (IsImportablePackRoot(directory))
+                {
+                    matches.Add(directory);
+                    if (matches.Count > 1)
+                    {
+                        throw new InvalidOperationException(
+                            "所选位置包含多个 Agent Pack。请只选择其中一个包，或分别导入。");
+                    }
+                }
+                pending.Enqueue((directory, depth + 1));
+            }
+        }
+        return matches.Count == 1
+            ? matches[0]
+            : throw new InvalidOperationException(
+                "没有找到可加载的 Agent Pack。请选择含 nova.industry.json 的标准包，或含旧版 NOVA manifest.json 的工坊包。");
+    }
+
+    private static bool IsImportablePackRoot(string root)
+        => File.Exists(Path.Combine(root, "nova.industry.json"))
+           || LegacyAgentPackConverter.CanConvert(root);
+
+    private static void DeleteDirectoryBestEffort(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+        {
+            return;
+        }
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch (IOException)
+        {
+            // A stale migration folder is ignored and can be cleaned on the next boot.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Installation already completed; cleanup must not roll it back.
+        }
+    }
+
+    private static async Task ExtractZipSafelyAsync(
+        string zipPath,
+        string destinationRoot,
+        CancellationToken cancellationToken)
+    {
+        const int maxArchiveEntries = MaxPackFiles + 80;
+        const long maxArchiveBytes = MaxPackBytes + (2 * 1024 * 1024);
+        var fullRoot = Path.GetFullPath(destinationRoot)
+            .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        using var archive = ZipFile.OpenRead(zipPath);
+        var fileCount = 0;
+        long totalBytes = 0;
+        foreach (var entry in archive.Entries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var relative = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
+            if (string.IsNullOrWhiteSpace(relative)
+                || relative.StartsWith("__MACOSX", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            var unixFileType = (entry.ExternalAttributes >> 16) & 0xF000;
+            if (unixFileType == 0xA000)
+            {
+                throw new InvalidOperationException("Agent Pack ZIP 不能包含符号链接。");
+            }
+            var destination = Path.GetFullPath(Path.Combine(destinationRoot, relative));
+            if (!destination.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Agent Pack ZIP 包含越界路径，已拒绝导入。");
+            }
+            if (string.IsNullOrEmpty(entry.Name))
+            {
+                Directory.CreateDirectory(destination);
+                continue;
+            }
+            fileCount++;
+            totalBytes += entry.Length;
+            if (fileCount > maxArchiveEntries || totalBytes > maxArchiveBytes)
+            {
+                throw new InvalidOperationException("Agent Pack ZIP 超出安全大小或文件数量上限。");
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            await using var input = entry.Open();
+            await using var output = File.Create(destination);
+            await input.CopyToAsync(output, cancellationToken);
+        }
+        if (fileCount == 0)
+        {
+            throw new InvalidOperationException("Agent Pack ZIP 是空的。");
+        }
+    }
+
     private IReadOnlyList<DiscoveredPack> DiscoverPacks()
     {
         var packs = new Dictionary<string, DiscoveredPack>(StringComparer.OrdinalIgnoreCase);
@@ -486,13 +720,30 @@ public sealed class AgentPackService
     {
         var manifest = pack.Manifest;
         var roster = ReadOptionalText(pack.Root, "agents/AGENT_ROSTER.md", 18_000);
-        var agentCount = roster.Split('\n').Count(line =>
-            line.TrimStart().StartsWith('|')
-            && !line.Contains("---", StringComparison.Ordinal)
-            && !line.Contains("Agent |", StringComparison.OrdinalIgnoreCase));
-        var workflowCount = Directory.Exists(Path.Combine(pack.Root, "workflows"))
-            ? Directory.EnumerateFiles(Path.Combine(pack.Root, "workflows"), "*.json").Count()
-            : 0;
+        var roleNames = ParseRosterNames(roster);
+        var workflows = Directory.Exists(Path.Combine(pack.Root, "workflows"))
+            ? Directory.EnumerateFiles(Path.Combine(pack.Root, "workflows"), "*.json")
+                .Select(ReadWorkflow)
+                .ToArray()
+            : [];
+        var workflowNames = workflows
+            .Select(workflow => workflow.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var declaredCapabilities = (manifest.DeclaredCapabilities ?? [])
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var capabilityNames = (manifest.CapabilityRequirements?.Items ?? [])
+            .Select(item => item.Name?.Trim())
+            .Concat(declaredCapabilities
+                .Where(IsUserFacingCapability)
+                .Select(ToCapabilityLabel))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         var enabled = state.Enabled.TryGetValue(manifest.Id!, out var explicitState)
             ? explicitState
             : pack.BuiltIn;
@@ -505,11 +756,53 @@ public sealed class AgentPackService
             manifest.Description ?? string.Empty,
             enabled,
             pack.BuiltIn,
-            manifest.DeclaredCapabilities ?? [],
+            declaredCapabilities,
             manifest.StarterPrompts ?? [],
-            agentCount,
-            workflowCount);
+            roleNames.Count,
+            workflows.Length,
+            workflows.Sum(workflow => workflow.StepCount),
+            roleNames,
+            workflowNames,
+            capabilityNames);
     }
+
+    private static IReadOnlyList<string> ParseRosterNames(string roster)
+    {
+        var roles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in roster.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (!trimmed.StartsWith('|') || trimmed.Contains("---", StringComparison.Ordinal)) continue;
+            var cells = trimmed.Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            if (cells.Length < 2) continue;
+            var id = cells[0].Trim('`', '*', ' ');
+            var name = cells[1].Trim('`', '*', ' ');
+            if (id.Equals("Agent", StringComparison.OrdinalIgnoreCase)
+                || id.Equals("角色", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("名称", StringComparison.OrdinalIgnoreCase)) continue;
+            if (id.Length > 0) roles[id] = name.Length > 0 ? name : id;
+        }
+        return roles.Values.ToArray();
+    }
+
+    private static string ToCapabilityLabel(string capability)
+        => capability.Trim().ToLowerInvariant() switch
+        {
+            "engineering" => "工程交付",
+            "research" => "研究分析",
+            "operations" => "办公执行",
+            "content" => "内容创作",
+            "compliance" => "合规审查",
+            "analytics" => "数据分析",
+            "creative" => "创意生成",
+            "versioned-calibration" => "可校准规则",
+            "proof-of-done" => "结果验收",
+            "legacy-workshop-migrated" => "工坊兼容",
+            _ => capability.Replace('-', ' ')
+        };
+
+    private static bool IsUserFacingCapability(string capability)
+        => !capability.Trim().Equals("legacy-workshop-migrated", StringComparison.OrdinalIgnoreCase);
 
     private AgentPackWorkflow ReadWorkflow(string workflowPath)
     {

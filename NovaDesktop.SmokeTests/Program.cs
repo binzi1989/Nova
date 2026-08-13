@@ -1,4 +1,5 @@
 using System.Net;
+using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -107,6 +108,59 @@ static byte[] CreateMinimalPdf(string text)
     return stream.ToArray();
 }
 
+await CheckAsync("workspace terminal permission policy", async () =>
+{
+    var safe = WorkspaceShellPolicy.Assess(
+        OperatingSystem.IsWindows() ? "powershell" : "zsh",
+        OperatingSystem.IsWindows() ? "dotnet test" : "dotnet test");
+    Expect(safe.CanPersistForWorkspace, "A normal workspace terminal command should support scoped persistence.");
+    Expect(!safe.RequiresExplicitApproval, "A normal workspace terminal command was classified as high risk.");
+
+    var dangerous = WorkspaceShellPolicy.Assess(
+        OperatingSystem.IsWindows() ? "powershell" : "zsh",
+        OperatingSystem.IsWindows() ? "Remove-Item C:\\Windows -Recurse" : "sudo rm -rf /etc");
+    Expect(!dangerous.CanPersistForWorkspace, "A high-risk terminal command must not support persistence.");
+    Expect(dangerous.RequiresExplicitApproval, "A high-risk terminal command must require explicit approval.");
+
+    var installer = WorkspaceShellPolicy.Assess(
+        OperatingSystem.IsWindows() ? "powershell" : "zsh",
+        OperatingSystem.IsWindows() ? "winget install Gyan.FFmpeg" : "brew install ffmpeg");
+    Expect(!installer.CanPersistForWorkspace, "Software installation must not inherit a persistent terminal grant.");
+    Expect(installer.RequiresExplicitApproval, "Software installation must always ask for explicit approval.");
+
+    var root = Path.Combine(Path.GetTempPath(), "nova-permission-root-" + Guid.NewGuid().ToString("N"));
+    var store = Path.Combine(Path.GetTempPath(), "nova-permission-store-" + Guid.NewGuid().ToString("N"), "grants.json");
+    Directory.CreateDirectory(root);
+    try
+    {
+        var host = new WorkspaceToolHost(root);
+        var shellResult = await host.ExecuteAsync(
+            "run_workspace_shell",
+            new JsonObject
+            {
+                ["shell"] = OperatingSystem.IsWindows() ? "powershell" : "zsh",
+                ["command"] = OperatingSystem.IsWindows() ? "Write-Output nova-shell-ok" : "printf nova-shell-ok",
+                ["reason"] = "Verify native workspace terminal execution.",
+                ["timeout_seconds"] = 30
+            },
+            CancellationToken.None);
+        Expect(shellResult.Contains("nova-shell-ok", StringComparison.Ordinal), "Native workspace terminal did not return its output.");
+
+        var service = new WorkspacePermissionService(store);
+        var grant = await service.GrantAsync(root, safe.PermissionKey, "run_workspace_shell", "smoke");
+        Expect(await service.IsGrantedAsync(root, safe.PermissionKey), "Persistent workspace permission was not restored from disk.");
+        Expect((await service.ListAsync()).Count == 1, "Persistent workspace permission was not listed.");
+        Expect(await service.RevokeAsync(grant.Id), "Persistent workspace permission was not revoked.");
+        Expect(!await service.IsGrantedAsync(root, safe.PermissionKey), "Revoked workspace permission remained active.");
+    }
+    finally
+    {
+        if (Directory.Exists(root)) Directory.Delete(root, true);
+        var storeRoot = Path.GetDirectoryName(store)!;
+        if (Directory.Exists(storeRoot)) Directory.Delete(storeRoot, true);
+    }
+});
+
 await CheckAsync("workspace list/read/search", async () =>
 {
     var host = new WorkspaceToolHost(@"D:\Agent");
@@ -124,7 +178,7 @@ await CheckAsync("workspace list/read/search", async () =>
 
     var searched = await host.ExecuteAsync(
         "search_workspace_text",
-        new JsonObject { ["query"] = "NOVA", ["file_pattern"] = ".md", ["use_regex"] = false },
+        new JsonObject { ["query"] = "把想做成的事交给它", ["file_pattern"] = ".md", ["use_regex"] = false },
         CancellationToken.None);
     Expect(searched.Contains("README.md", StringComparison.OrdinalIgnoreCase), "Workspace search returned no README match.");
 });
@@ -350,6 +404,71 @@ await CheckAsync("Agent Creation Standard workshop", async () =>
         Expect(details.Workflows.FirstOrDefault()?.Steps.Count >= 4, "Generated Agent Pack lost its executable workflow contract.");
         Expect(details.Certification?.Score == 100, "Agent certification was not persisted with the installed pack.");
         Expect(File.Exists(Path.Combine(installed, created.Pack.Id, "agent-card.json")), "Generated Agent Card was not installed.");
+        var exportedZip = Path.Combine(sandbox, "generated-agent-pack.zip");
+        ZipFile.CreateFromDirectory(Path.Combine(installed, created.Pack.Id), exportedZip);
+        var reimported = await packs.InstallFromSourceAsync(exportedZip);
+        Expect(reimported.Id == created.Pack.Id && Directory.Exists(Path.Combine(installed, created.Pack.Id)),
+            "ZIP import did not safely refresh an already installed Agent Pack.");
+
+        // Early Electron workshop builds allowed the model to invent a parallel
+        // manifest/contract/workflow layout and even self-declare "registered".
+        // Import must migrate that layout through the native compiler contract
+        // instead of dropping roles/steps or trusting the model's status field.
+        var legacyRoot = Path.Combine(sandbox, "legacy-workshop-pack");
+        Directory.CreateDirectory(legacyRoot);
+        await File.WriteAllTextAsync(Path.Combine(legacyRoot, "manifest.json"), """
+            {
+              "schema": "nova.agent-pack.manifest/1.0",
+              "packId": "nova.user.legacy-spreadsheet",
+              "name": "桌面表格制作助手",
+              "version": "1.0.0",
+              "status": "registered",
+              "category": "办公自动化",
+              "description": "根据用户提供的数据制作可编辑表格。",
+              "objective": "交付结构清晰且可直接编辑的表格文件",
+              "primaryArtifact": "数据表格.xlsx",
+              "scenarioProfile": "operations",
+              "autonomyLevel": "assist",
+              "files": { "contract": "契约.json", "workflow": "工作流.json" }
+            }
+            """);
+        await File.WriteAllTextAsync(Path.Combine(legacyRoot, "契约.json"), """
+            {
+              "requiredInputs": ["用户提供的原始数据文件", "表格用途和必含字段"],
+              "recommendedInputs": ["目标办公软件版本"],
+              "roles": [
+                { "id": "data-architect", "name": "数据架构师", "responsibility": "设计表格结构", "deliverables": ["表格结构方案.json"] },
+                { "id": "table-engineer", "name": "表格工程师", "responsibility": "制作可编辑表格", "deliverables": ["数据表格.xlsx"] },
+                { "id": "quality-controller", "name": "质控审查员", "responsibility": "独立验证结果", "deliverables": ["proof-of-done.json"] }
+              ],
+              "boundaries": ["只使用用户提供的数据"]
+            }
+            """);
+        await File.WriteAllTextAsync(Path.Combine(legacyRoot, "工作流.json"), """
+            {
+              "entryWorkflow": [
+                { "order": 1, "title": "解析原始数据", "owner": "data-architect", "output": "表格结构方案.json", "acceptance": ["字段完整"] },
+                { "order": 2, "title": "生成工作簿", "owner": "table-engineer", "output": "数据表格.xlsx", "acceptance": ["文件可以打开编辑"] },
+                { "order": 3, "title": "独立验证", "owner": "quality-controller", "output": "proof-of-done.json", "acceptance": ["证据可检查"] }
+              ]
+            }
+            """);
+        var migrated = await packs.InstallFromDirectoryAsync(legacyRoot);
+        var migratedDetails = packs.Get(migrated.Id);
+        Expect(migrated.Id == "nova.user.legacy-spreadsheet",
+            "Legacy workshop migration changed a valid stable Agent Pack ID.");
+        Expect(migratedDetails.Workflows[0].Steps.Count == 3
+               && migratedDetails.Workflows[0].Steps.Select(step => step.Agent)
+                   .SequenceEqual(["data-architect", "table-engineer", "quality-controller"]),
+            "Legacy workshop migration lost approved roles or workflow steps.");
+        Expect(migratedDetails.Onboarding?.Steps.Any(step =>
+                step.Title.Contains("原始数据文件", StringComparison.Ordinal)
+                && step.Kind.Equals("attachment", StringComparison.OrdinalIgnoreCase)) == true,
+            "Legacy workshop migration did not turn file inputs into upload controls.");
+        Expect(File.Exists(Path.Combine(installed, migrated.Id, "nova.industry.json"))
+               && File.Exists(Path.Combine(installed, migrated.Id, "agent-card.json"))
+               && !File.Exists(Path.Combine(legacyRoot, "nova.industry.json")),
+            "Legacy workshop migration did not produce a native installed copy or modified its source folder.");
 
         var reviewedDraft = new AgentWorkshopOrchestrationDraft(
             "A reviewed multi-role operating design.",
@@ -387,10 +506,15 @@ await CheckAsync("Agent Creation Standard workshop", async () =>
             "Reviewed orchestration roles were not persisted into the executable workflow.");
         Expect(reviewedDetails.Workflows[0].Steps.Count == reviewedDraft.Workflow.Count,
             "Reviewed orchestration lost one or more approved execution steps during Pack compilation.");
+        Expect(reviewed.Pack.AgentCount == reviewedDraft.Roles.Count
+               && reviewed.Pack.WorkflowStepCount == reviewedDraft.Workflow.Count,
+            "Agent Pack summary counts do not match the approved roles and workflow steps.");
         Expect(reviewedDetails.Onboarding?.Steps.Any(step =>
                 step.Title.Contains("简历", StringComparison.Ordinal)
-                && step.Kind.Equals("attachment", StringComparison.OrdinalIgnoreCase)) == true,
-            "File-oriented required inputs were rendered as text fields instead of upload controls.");
+                && step.Kind.Equals("text", StringComparison.OrdinalIgnoreCase)) == true
+            && reviewedDetails.Onboarding.Steps.Count(step =>
+                step.Kind.Equals("attachment", StringComparison.OrdinalIgnoreCase)) == 1,
+            "Workshop onboarding did not consolidate file inputs into one shared upload inlet.");
         Expect(reviewedDetails.AgentRoster.Contains("Domain Analyst", StringComparison.Ordinal)
                && reviewedDetails.AgentRoster.Contains("Quality Reviewer", StringComparison.Ordinal),
             "Reviewed orchestration roster was replaced by the legacy two-role template.");
@@ -1616,6 +1740,8 @@ await CheckAsync("MCP Streamable HTTP JSON/SSE", async () =>
 
         var tools = await registry.InspectToolsAsync("remote-fixture", @"D:\Agent", CancellationToken.None);
         Expect(tools.Contains("\"remote_echo\"", StringComparison.Ordinal), "HTTP MCP SSE tools/list failed.");
+        var cachedTools = await registry.InspectToolsAsync("remote-fixture", @"D:\Agent", CancellationToken.None);
+        Expect(cachedTools.Contains("\"remote_echo\"", StringComparison.Ordinal), "HTTP MCP cached tools/list failed.");
         var result = await registry.CallToolAsync(
             "remote-fixture",
             "remote_echo",
@@ -1623,7 +1749,7 @@ await CheckAsync("MCP Streamable HTTP JSON/SSE", async () =>
             @"D:\Agent",
             CancellationToken.None);
         Expect(result.Contains("HTTP MCP ready", StringComparison.Ordinal), "HTTP MCP tools/call failed.");
-        Expect(handler.InitializedNotifications == 2, "HTTP MCP initialized notification was not sent for each session.");
+        Expect(handler.InitializedNotifications == 1, "HTTP MCP connection was restarted instead of reused.");
         Expect(handler.SessionHeaderSeen, "HTTP MCP session header was not continued.");
         Expect(handler.ProtocolHeaderSeen, "HTTP MCP protocol version header was not sent.");
     }
@@ -2475,6 +2601,79 @@ await CheckAsync("background web research approval and private-network guard", a
         && approval.Description.Contains("访问内网", StringComparison.Ordinal),
         "Background research approval does not clearly disclose domain and no-browser behavior.");
     await Task.CompletedTask;
+});
+
+await CheckAsync("semantic web route planning and anti-loop guard", async () =>
+{
+    var temporaryDirectory = Path.Combine(
+        Path.GetTempPath(),
+        "nova-web-route-" + Guid.NewGuid().ToString("N"));
+    var workspace = Path.Combine(temporaryDirectory, "workspace");
+    Directory.CreateDirectory(workspace);
+    try
+    {
+        var registry = new McpRegistryService(Path.Combine(temporaryDirectory, "mcp.json"));
+        await registry.UpsertAsync(
+            new McpServerRegistration(
+                "playwright-official",
+                "npx",
+                ["-y", "@playwright/mcp@latest", "--headless", "--isolated"],
+                workspace,
+                true,
+                new Dictionary<string, string>()),
+            CancellationToken.None);
+        var host = new WorkspaceToolHost(workspace, mcpRegistry: registry);
+        var plan = await host.ExecuteAsync(
+            "plan_web_interaction",
+            new JsonObject
+            {
+                ["objective"] = "打开登录菜单并选择账号登录方式",
+                ["url"] = "https://example.com/login",
+                ["operation"] = "interact",
+                ["requires_visible_session"] = false,
+                ["changes_external_state"] = false
+            },
+            CancellationToken.None);
+        Expect(
+            plan.Contains("semantic_browser_mcp", StringComparison.Ordinal)
+            && plan.Contains("playwright-official", StringComparison.Ordinal)
+            && plan.Contains("resolve_blocking_overlays_first", StringComparison.Ordinal)
+            && plan.Contains("infer_click_hover_or_menu_trigger", StringComparison.Ordinal)
+            && plan.Contains("inspect_iframes_and_shadow_roots", StringComparison.Ordinal)
+            && plan.Contains("captcha_or_mfa", StringComparison.Ordinal)
+            && plan.Contains("success_requires_observable_evidence", StringComparison.Ordinal),
+            "Web planner did not select semantic browser control with complete recovery and verification handling.");
+
+        var desktopHost = new WorkspaceToolHost(workspace, mcpRegistry: registry);
+        var action = new JsonObject { ["url"] = "https://example.com/login" };
+        var track = typeof(WorkspaceToolHost).GetMethod(
+            "TrackWebInteractionResult",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new Exception("Web interaction state tracker is missing.");
+        var ensure = typeof(WorkspaceToolHost).GetMethod(
+            "EnsureWebInteractionCanProceed",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new Exception("Web interaction anti-loop guard is missing.");
+        track.Invoke(desktopHost, ["open_browser_url", action, "{\"opened\":true}"]);
+        try
+        {
+            ensure.Invoke(
+                desktopHost,
+                [
+                "send_window_key",
+                new JsonObject { ["window_id"] = "missing-window", ["key"] = "TAB" }
+                ]);
+            throw new Exception("A second blind web action was not blocked before execution.");
+        }
+        catch (System.Reflection.TargetInvocationException exception)
+            when (exception.InnerException?.Message.Contains("网页保护", StringComparison.Ordinal) == true)
+        {
+        }
+    }
+    finally
+    {
+        Directory.Delete(temporaryDirectory, recursive: true);
+    }
 });
 
 await CheckAsync("productivity summary from local history", async () =>

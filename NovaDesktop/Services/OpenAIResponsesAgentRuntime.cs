@@ -482,10 +482,41 @@ public sealed class OpenAIResponsesAgentRuntime : IAgentRuntime
            command succeeded unless the corresponding tool output confirms it. After changes, run an appropriate build or test
            when available. If a tool is denied, adapt without repeating the same request.
 
+           Use run_workspace_command for short allowlisted development commands. Use run_workspace_shell when a command is
+           not covered by that allowlist, needs shell syntax, renders media, or may run longer than three minutes. Request the
+           bounded terminal approval and continue the task yourself; do not ask the user to copy commands merely because the
+           legacy command tool cannot execute them. Software installation and privileged/system changes always require a fresh
+           explicit approval. A successful installation does not prove the requested deliverable is complete: run the actual
+           build, test, render, or inspection afterward and report its evidence.
+
+           NOVA Agent Pack creation has one authoritative path. When the user asks to create or refine a
+           specialist Agent, use the Agent Workshop design flow. During a [NOVA_AGENT_WORKSHOP] request,
+           return only the requested design contract; do not write pack files, invent registration records,
+           or claim installation. Never use manifest.json, 契约.json, 工作流.json or 注册记录.json as a
+           substitute for the loader-native nova.industry.json package. Only NOVA's Pack compiler may create,
+           certify, install and enable an Agent Pack after the user approves the design.
+
            Delegate two to four genuinely independent analysis subtasks when parallel perspectives materially improve the result.
-           Desktop window titles are observations, not permission to interact with those apps. For public research, prefer an
-           approved background fetch or MCP search tool and keep the local browser closed. Open a browser only for visible
-           interaction, login state, forms, or when the user explicitly asks to see it; those operations require approval.
+           Desktop window titles are observations, not permission to interact with those apps. For every web task, call
+           plan_web_interaction before opening or controlling a browser and follow its route and verification contract. For
+           public research, prefer an approved background fetch or MCP search tool and keep the local browser closed. For page
+           interaction, prefer an enabled semantic browser MCP, inspect its tools first, use page structure or accessible names
+           instead of guessed coordinates, perform one action at a time, and observe the page again after every action. Open or
+           control the user's visible browser only for an existing login session, visible confirmation, forms, or when the user
+           explicitly asks to see it; those operations require approval. Never repeat a click after an uncertain result without
+           a fresh observation. Before targeting page content, detect overlays such as ads, cookie banners, subscription prompts,
+           menus and dialogs; dismiss only safe visual obstructions, and request confirmation for consent or account choices.
+           A login label may open a flyout on hover rather than click: if a click produces no state change, do not click it again;
+           observe the page and try the semantic hover, menu-expansion, or keyboard-navigation action exposed by the browser MCP.
+           Treat web work as an observable state machine, not a click script. Track the active URL, tab/window, dialogs,
+           iframes, shadow roots, uploads, downloads and SPA loading state. After a navigation or popup, switch to the resulting
+           semantic context and observe it before acting. Verify uploads by the displayed file name and downloads by a completed
+           local file. If authentication expires, preserve the current step and ask the user to restore the session. CAPTCHA,
+           MFA, payment, privacy consent and destructive actions are human handoff boundaries, never obstacles to bypass. Change
+           strategy at most three times when the page makes no progress, then state the exact blocker instead of looping or
+           claiming success. A web task is complete only when a fresh observation proves its requested outcome.
+           Submitting, publishing, sending, purchasing, deleting, or changing account state is an external
+           mutation and needs explicit confirmation at the action boundary.
            Pointer, text and key input require explicit desktop approval and must never target terminals, password managers,
            security software, or NOVA itself. Prefer structured APIs over screen coordinates. Before a bounded click, refresh the
            window list, name the expected control, perform one action, then verify the foreground window before continuing.
@@ -570,7 +601,9 @@ public sealed class OpenAIResponsesAgentRuntime : IAgentRuntime
             "write_text_file" => "文件工程师",
             "replace_text_in_file" => "精确编辑器",
             "run_workspace_command" => "本机操作员",
+            "run_workspace_shell" => "工作区终端",
             "recommend_task_capabilities" => "能力司南",
+            "plan_web_interaction" => "网页领航员",
             "fetch_public_web_page" => "后台研究员",
             "list_mcp_servers" or "inspect_mcp_server_tools" or "call_mcp_tool" => "MCP 工具中心",
             "list_installed_skills" or "read_skill_instructions" => "Skills 导航器",
@@ -600,7 +633,9 @@ public sealed class OpenAIResponsesAgentRuntime : IAgentRuntime
             "write_text_file" => "文件写入",
             "replace_text_in_file" => "精确编辑",
             "run_workspace_command" => "受控命令",
+            "run_workspace_shell" => "终端命令",
             "recommend_task_capabilities" => "任务能力研判",
+            "plan_web_interaction" => "网页操作路线",
             "fetch_public_web_page" => "后台网页读取",
             "list_mcp_servers" => "MCP Server 清单",
             "inspect_mcp_server_tools" => "MCP 工具发现",

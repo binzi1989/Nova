@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.1.0-preview.17
+
+### Added
+
+- 运行中的补充、纠正和停止指令升级为控制面事件：NOVA 会立即请求取消当前可取消步骤，并在同一任务、同一工作区和同一上下文中自动续跑，不再排队等整轮模型自然结束。
+- 新增工作区写入预检、持久授权与受控 Shell 策略，为 Windows PowerShell/CMD 和 macOS shell 提供可审计的分级授权基础。
+- MCP 能力准备支持按任务发现、审阅后启用与会话复用，减少同一 MCP 在单轮任务中被重复启动。
+
+### Fixed
+
+- 修复用户已经纠正方向，但迟到的旧模型响应仍被当成交付结果的问题；取消后的旧响应现在会被丢弃并安全结算任务状态。
+- 修复停止后继续任务可能提示“already executing”、工作区权限恢复失败以及部分任务终态无法正确释放宿主租约的问题。
+- 修复 Agent Pack 旧格式导入、上传型输入、角色/工作流计数和首次使用执行入口不一致的问题。
+- 继续收紧浅色跨平台界面、任务列表、输入工具栏、执行侧栏与交付审查台的密度、对齐和可读性。
+
+### Verification
+
+- Electron Renderer 与主进程语法检查通过，AgentOS Bridge 生产构建通过。
+- 智能上下文冒烟检查通过；任务抢占恢复链路完成本地构建验证。
+
+### English summary
+
+- In-flight corrections now preempt the active cancellable step and resume on the same durable task instead of waiting for the entire model run to finish.
+- Late responses from cancelled runs can no longer overwrite a newer user direction.
+- Workspace grants, governed shell execution, MCP reuse, legacy Agent Pack migration, and the cross-platform Electron UI received another reliability pass.
+
+## 1.1.0-preview.16
+
+### Fixed
+
+- Agent 工坊模型现在只产出可审阅的行业设计草案，不再自行发明 Pack 文件名、目录结构或伪造 `registered` 状态。
+- 新 Agent 的标准身份、角色、工作流、交付契约、评测与注册状态统一由 NOVA 原生 Pack 编译器生成。
+- 导入器可识别早期工坊生成的 `manifest.json`、`契约.json`、`工作流.json` 目录，并无损迁移为原生 Agent Pack；源目录保持不变。
+- 旧格式迁移会保留已批准的角色与完整工作流，并把文件类输入转换为真实上传控件。
+
+### Verification
+
+- 使用“桌面表格制作助手”格式验证 5 个角色与 7 条工作流可完整迁移、注册和启用。
+- Agent 工坊、旧 Pack 迁移、Electron Renderer、主进程语法和 AgentOS Bridge 构建通过。
+
+### English summary
+
+- Agent Workshop models now produce reviewable designs only; native Pack compilation owns files, certification, registration, and enablement.
+- Early workshop folders are migrated losslessly into loader-native Agent Packs without modifying their source directories.
+- Roles, workflow steps, upload-oriented inputs, delivery contracts, and proof-of-done requirements survive migration.
+
 ## 1.1.0-preview.15
 
 ### Added

@@ -175,6 +175,10 @@ internal sealed record BridgeNotification(string Event, object Payload);
 internal sealed record PendingToolApproval(
     string TaskId,
     string ToolName,
+    string WorkspaceRoot,
+    string PermissionKey,
+    bool CanRememberForTask,
+    bool CanPersistForWorkspace,
     TaskCompletionSource<bool> Completion);
 
 internal sealed class AgentOsBridgeHost : IDisposable
@@ -202,6 +206,7 @@ internal sealed class AgentOsBridgeHost : IDisposable
     private readonly KnowledgeIndexService _knowledgeIndex = new();
     private readonly KnowledgeGraphService _knowledgeGraph = new();
     private readonly KnowledgeOperatingSystemService _knowledgeOperatingSystem = new();
+    private readonly WorkspacePermissionService _workspacePermissions = new();
     private readonly ConcurrentDictionary<string, TaskItem> _active =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _startGates =
@@ -256,7 +261,16 @@ internal sealed class AgentOsBridgeHost : IDisposable
             "delete_archived_task" => await DeleteArchivedTaskAsync(parameters),
             "start_task" => await StartTaskAsync(parameters),
             "run_agent" => await RunAgentAsync(parameters),
-            "resolve_tool_approval" => ResolveToolApproval(parameters),
+            "resolve_tool_approval" => await ResolveToolApprovalAsync(parameters),
+            "list_workspace_permissions" => await _workspacePermissions.ListAsync(),
+            "revoke_workspace_permission" => new
+            {
+                revoked = await _workspacePermissions.RevokeAsync(RequiredString(parameters, "id"))
+            },
+            "clear_workspace_permissions" => new
+            {
+                removed = await _workspacePermissions.ClearAsync(parameters["workspace"]?.GetValue<string>())
+            },
             "run_design_session" => await RunDesignSessionAsync(parameters),
             "cancel_task" => await CancelTaskAsync(parameters),
             "cancel_design_session" => CancelDesignSession(parameters),
@@ -285,7 +299,7 @@ internal sealed class AgentOsBridgeHost : IDisposable
                 RequiredString(parameters, "packId"),
                 RequiredString(parameters, "patchId")),
             "get_agent_pack_capabilities" => await GetAgentPackCapabilitiesAsync(parameters),
-            "install_agent_pack" => await _agentPacks.InstallFromDirectoryAsync(
+            "install_agent_pack" => await _agentPacks.InstallFromSourceAsync(
                 RequiredString(parameters, "sourceRoot")),
             "set_agent_pack_enabled" => await _agentPacks.SetEnabledAsync(
                 RequiredString(parameters, "id"),
@@ -322,23 +336,32 @@ internal sealed class AgentOsBridgeHost : IDisposable
         };
     }
 
-    private object ResolveToolApproval(JsonObject parameters)
+    private async Task<object> ResolveToolApprovalAsync(JsonObject parameters)
     {
         var approvalId = RequiredString(parameters, "approvalId");
         var approved = parameters["approved"]?.GetValue<bool>() ?? false;
         var rememberForTask = parameters["rememberForTask"]?.GetValue<bool>() ?? false;
+        var rememberForWorkspace = parameters["rememberForWorkspace"]?.GetValue<bool>() ?? false;
         if (!_pendingToolApprovals.TryGetValue(approvalId, out var pending))
         {
             return new { resolved = false, expired = true };
         }
-        if (approved && rememberForTask)
+        if (approved && rememberForTask && pending.CanRememberForTask)
         {
             _rememberedToolApprovals.TryAdd(
-                ToolApprovalKey(pending.TaskId, pending.ToolName),
+                ToolApprovalKey(pending.TaskId, pending.PermissionKey),
                 0);
         }
+        if (approved && rememberForWorkspace && pending.CanPersistForWorkspace)
+        {
+            await _workspacePermissions.GrantAsync(
+                pending.WorkspaceRoot,
+                pending.PermissionKey,
+                pending.ToolName,
+                "用户在权限确认框中永久信任当前工作区");
+        }
         pending.Completion.TrySetResult(approved);
-        return new { resolved = true, approved, rememberForTask };
+        return new { resolved = true, approved, rememberForTask, rememberForWorkspace };
     }
 
     private static string ToolApprovalKey(string taskId, string toolName)
@@ -655,9 +678,20 @@ internal sealed class AgentOsBridgeHost : IDisposable
             {
                 if (_agentRuns.ContainsKey(requestedTaskId))
                 {
+                    if (_runCancellations.TryGetValue(
+                            requestedTaskId,
+                            out var staleCancellation)
+                        && staleCancellation.IsCancellationRequested)
+                    {
+                        await ReclaimCancelledTaskAsync(activeTask);
+                        return await StartTaskCoreAsync(
+                            parameters,
+                            prompt,
+                            mode,
+                            requestedTaskId);
+                    }
                     throw new InvalidOperationException(
-                        $"Task {requestedTaskId} is already executing. "
-                        + "Wait for the active run or cancel it before retrying.");
+                        "当前任务仍在执行中。请等待当前步骤完成，或先安全停止后再继续。");
                 }
 
                 return ProjectTask(activeTask);
@@ -1119,12 +1153,20 @@ internal sealed class AgentOsBridgeHost : IDisposable
                                                   "orchestration",
                                                   StringComparison.OrdinalIgnoreCase)
                                               && approvedDelegation;
-                var allowed = _rememberedToolApprovals.ContainsKey(
-                                  ToolApprovalKey(task.Id, approval.ToolName))
-                              || (workspaceApproved
-                               && (lowRiskWorkspaceAction || approvedDelegation))
-                              || (desktopApproved && boundedDesktopAction)
-                              || orchestrationDelegation;
+                var permissionKey = approval.PermissionKey ?? approval.ToolName;
+                var persistentlyApproved = !approval.RequiresExplicitApproval
+                                           && approval.CanPersistForWorkspace
+                                           && await _workspacePermissions.IsGrantedAsync(
+                                               task.WorkspaceRoot,
+                                               permissionKey);
+                var allowed = !approval.RequiresExplicitApproval
+                              && (_rememberedToolApprovals.ContainsKey(
+                                      ToolApprovalKey(task.Id, permissionKey))
+                                  || persistentlyApproved
+                                  || (workspaceApproved
+                                      && (lowRiskWorkspaceAction || approvedDelegation))
+                                  || (desktopApproved && boundedDesktopAction)
+                                  || orchestrationDelegation);
 
                 if (explicitlyReadOnly)
                 {
@@ -1162,6 +1204,10 @@ internal sealed class AgentOsBridgeHost : IDisposable
                 var pending = new PendingToolApproval(
                     task.Id,
                     approval.ToolName,
+                    task.WorkspaceRoot,
+                    permissionKey,
+                    !approval.RequiresExplicitApproval,
+                    approval.CanPersistForWorkspace && !approval.RequiresExplicitApproval,
                     completion);
                 _pendingToolApprovals[approvalId] = pending;
                 await _publish("agent_event", new
@@ -1181,7 +1227,13 @@ internal sealed class AgentOsBridgeHost : IDisposable
                     toolName = approval.ToolName,
                     approval.Title,
                     approval.Description,
-                    preview = approval.Description,
+                    preview = approval.ArgumentsPreview,
+                    risk = approval.Risk,
+                    permissionKey,
+                    canRememberForTask = !approval.RequiresExplicitApproval,
+                    canPersistForWorkspace = approval.CanPersistForWorkspace
+                                             && !approval.RequiresExplicitApproval,
+                    requiresExplicitApproval = approval.RequiresExplicitApproval,
                     scope = boundedDesktopAction
                         ? "desktop"
                         : approval.ToolName is "call_mcp_tool"
@@ -1797,6 +1849,39 @@ internal sealed class AgentOsBridgeHost : IDisposable
         return Task.FromResult<object>(new { taskId, cancelled });
     }
 
+    private async Task ReclaimCancelledTaskAsync(TaskItem task)
+    {
+        task.State = TaskState.Paused;
+        task.Stage = "上次执行已停止；上下文和已完成结果已保留，可继续任务";
+        try
+        {
+            await _snapshots.SaveAsync(task);
+        }
+        catch
+        {
+            // Releasing stale in-memory ownership is still required even when a
+            // best-effort recovery snapshot cannot be persisted.
+        }
+        try
+        {
+            await _supervisor.ReleaseAsync(
+                task,
+                executionSequence: task.ExecutionSequence);
+        }
+        catch
+        {
+            // ReleaseAsync closes its local lease handle in finally.
+        }
+        _agentRuns.TryRemove(task.Id, out _);
+        if (_runCancellations.TryRemove(task.Id, out var cancellation))
+        {
+            cancellation.Dispose();
+        }
+        _active.TryRemove(task.Id, out _);
+        _governor.EndTask(task.Id);
+        ClearTaskApprovals(task.Id);
+    }
+
     private async Task<object> ListCapabilitiesAsync(JsonObject parameters)
     {
         await BootAsync();
@@ -2328,7 +2413,8 @@ internal sealed class AgentOsBridgeHost : IDisposable
             task.CreatedAt,
             updatedAt = DateTimeOffset.Now,
             task.ExecutionMode,
-            task.ExecutionSequence
+            task.ExecutionSequence,
+            attachments = task.Attachments
         };
 
     private static object ProjectSnapshot(TaskSnapshot snapshot)
@@ -2348,7 +2434,8 @@ internal sealed class AgentOsBridgeHost : IDisposable
             snapshot.UpdatedAt,
             snapshot.ExecutionMode,
             snapshot.ExecutionSequence,
-            hasResult = !string.IsNullOrWhiteSpace(snapshot.Draft)
+            hasResult = !string.IsNullOrWhiteSpace(snapshot.Draft),
+            attachments = snapshot.Attachments ?? []
         };
 
     private static TaskItem RestoreTask(TaskSnapshot snapshot, string prompt)

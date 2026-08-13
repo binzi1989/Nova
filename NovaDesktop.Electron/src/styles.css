@@ -861,11 +861,11 @@ select:focus-visible {
 .message-attachments {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 12px;
+  gap: 10px;
+  margin-top: 14px;
 }
 
-.message-attachments span {
+.message-attachment-file {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -874,6 +874,104 @@ select:focus-visible {
   border-radius: 6px;
   color: #90a0b7;
   font-size: 11.5px;
+}
+
+.message-attachment-file small {
+  color: var(--muted);
+}
+
+.message-image-attachment {
+  width: 156px;
+  display: grid;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--panel-border, #e0e4e9);
+  border-radius: 12px;
+  background: var(--panel, #ffffff);
+  color: var(--ink, #353b44);
+  cursor: zoom-in;
+  text-align: left;
+}
+
+.message-image-attachment:hover {
+  border-color: var(--accent, #5c70d6);
+  box-shadow: 0 8px 24px rgba(31, 39, 51, .1);
+  transform: translateY(-1px);
+}
+
+.message-image-attachment img {
+  width: 100%;
+  height: 112px;
+  display: block;
+  object-fit: cover;
+  background: var(--panel-subtle, #f7f8fa);
+}
+
+.message-image-attachment span {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+.image-preview-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 36px;
+  background: rgba(20, 24, 31, .58);
+  backdrop-filter: blur(10px);
+}
+
+.image-preview-layer figure {
+  width: min(900px, 92vw);
+  max-height: 90vh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--panel-border, #e0e4e9);
+  border-radius: 18px;
+  background: var(--panel, #ffffff);
+  box-shadow: 0 28px 80px rgba(15, 20, 28, .28);
+}
+
+.image-preview-layer header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--panel-border, #e0e4e9);
+}
+
+.image-preview-layer header button {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: var(--panel-subtle, #f7f8fa);
+  color: var(--ink, #353b44);
+  cursor: pointer;
+}
+
+.image-preview-layer figure > img {
+  width: 100%;
+  height: 100%;
+  max-height: calc(90vh - 64px);
+  object-fit: contain;
+  background: #f3f5f8;
 }
 
 .thinking-line {
@@ -1532,6 +1630,1021 @@ select:focus-visible {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* Final Agent launch theme. Keep this at the physical end of the stylesheet:
+   several legacy pack themes above still define the old black console UI. */
+body .agent-launch-layer {
+  background: rgba(35, 41, 50, .16) !important;
+  backdrop-filter: blur(5px) !important;
+}
+
+body .agent-launch-modal {
+  width: min(920px, calc(100vw - 40px)) !important;
+  max-height: min(860px, calc(100vh - 40px)) !important;
+  border: 1px solid #dfe3e8 !important;
+  border-radius: 16px !important;
+  background: #ffffff !important;
+  color: #2a3038 !important;
+  box-shadow: 0 24px 72px rgba(30, 36, 44, .16) !important;
+}
+
+body .agent-launch-modal > header,
+body .agent-launch-steps,
+body .agent-capability-preflight,
+body .agent-launch-outcomes,
+body .agent-launch-modal > footer {
+  border-color: #e5e8ec !important;
+  background: #ffffff !important;
+}
+
+body .agent-launch-modal > header h2,
+body .agent-launch-step-content > header strong,
+body .agent-launch-outcomes > header strong,
+body .agent-capability-preflight > header strong,
+body .agent-capability-preflight article strong,
+body .agent-launch-outcomes button strong {
+  color: #2a3038 !important;
+}
+
+body .agent-launch-modal > header p,
+body .agent-launch-step-content > p,
+body .agent-launch-step-content details p,
+body .agent-launch-step-content details small,
+body .agent-launch-outcomes > header small,
+body .agent-capability-preflight > header small,
+body .agent-capability-preflight article p,
+body .agent-capability-preflight article small,
+body .agent-launch-outcomes button span,
+body .agent-launch-modal > footer,
+body .agent-launch-attachment small {
+  color: #7b8490 !important;
+}
+
+body .agent-launch-modal > header span,
+body .agent-launch-outcomes > header span,
+body .agent-capability-preflight > header span,
+body .agent-launch-step-content > header span,
+body .agent-launch-step-content summary,
+body .agent-launch-outcomes button b {
+  color: #5d6ed0 !important;
+}
+
+body .agent-launch-symbol,
+body .agent-launch-step-number,
+body .agent-capability-kind {
+  border-color: #daddf0 !important;
+  background: #f0effc !important;
+  color: #5d60ca !important;
+}
+
+body .agent-capability-preflight {
+  border-bottom: 1px solid #e5e8ec !important;
+  background: #f8f9fb !important;
+}
+
+body .agent-capability-preflight article,
+body .agent-capability-preflight article.ready,
+body .agent-launch-step,
+body .agent-launch-outcomes button,
+body .agent-launch-outcomes button.recommended {
+  border-color: #dfe3e8 !important;
+  background: #ffffff !important;
+  color: #2a3038 !important;
+  box-shadow: 0 1px 2px rgba(27, 32, 39, .025) !important;
+}
+
+body .agent-capability-preflight article.ready {
+  border-left: 3px solid #65a982 !important;
+}
+
+body .agent-launch-steps {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+body .agent-launch-step-content textarea,
+body .agent-launch-step-content select {
+  border-color: #d9dee5 !important;
+  background: #ffffff !important;
+  color: #2a3038 !important;
+}
+
+body .agent-launch-step-content textarea::placeholder {
+  color: #9ca4ae !important;
+}
+
+body .agent-launch-step-content textarea:focus,
+body .agent-launch-step-content select:focus {
+  border-color: #8795dd !important;
+  outline: 3px solid rgba(92, 112, 214, .10) !important;
+}
+
+body .agent-launch-attachment button,
+body .agent-launch-modal > header > button,
+body .agent-launch-modal > footer button,
+body .agent-capability-preflight article button {
+  border-color: #d8dde4 !important;
+  background: #f7f8fa !important;
+  color: #5664bd !important;
+}
+
+body .agent-launch-outcomes {
+  border-top: 1px solid #e5e8ec !important;
+  background: #f8f9fb !important;
+}
+
+body .agent-launch-outcomes > div {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+body .agent-launch-outcomes button:hover,
+body .agent-launch-outcomes button.recommended {
+  border-color: #c9ceeb !important;
+  background: #f7f7fd !important;
+}
+
+body .agent-launch-error {
+  border-color: #efd0ca !important;
+  background: #fff5f3 !important;
+  color: #9b4b3f !important;
+}
+
+/* Agent launch usability: one shared material inlet and an always-visible
+   execution action. These rules intentionally live after the legacy skins. */
+body .agent-launch-modal {
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto !important;
+}
+
+body .agent-launch-modal:not(:has(.agent-capability-preflight)) {
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto !important;
+}
+
+body .agent-launch-materials {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 18px;
+  padding: 13px 20px;
+  border-bottom: 1px solid #e5e8ec;
+  background: #f8f9fb;
+}
+
+body .agent-launch-materials > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+body .agent-launch-materials span {
+  color: #5d6ed0;
+  font-size: 10.5px;
+  font-weight: 800;
+}
+
+body .agent-launch-materials strong {
+  color: #2a3038;
+  font-size: 12px;
+}
+
+body .agent-launch-materials small,
+body .agent-launch-materials p {
+  margin: 0;
+  color: #7b8490;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+body .agent-launch-materials > button {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 13px;
+  border: 1px solid #cfd5ed;
+  border-radius: 8px;
+  background: #f0f2ff;
+  color: #5063c7;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+body .agent-launch-materials > p {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body .agent-launch-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+body .agent-launch-modal > footer .primary {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 16px;
+  border-color: #6477d6 !important;
+  background: #6477d6 !important;
+  color: #ffffff !important;
+  font-weight: 800;
+}
+
+body .agent-launch-modal > footer .primary:disabled {
+  cursor: default;
+  opacity: .55;
+}
+
+body .agent-pack-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+body .agent-pack-facts > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+  border-color: #dfe3e8;
+  background: #f8f9fb;
+}
+
+body .agent-pack-facts strong {
+  color: #343b45;
+  font-size: 11px;
+}
+
+body .agent-pack-facts small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #727c88;
+  font-size: 9.5px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+}
+
+@media (max-width: 720px) {
+  body .agent-launch-materials,
+  body .agent-pack-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body .agent-launch-materials > button {
+    width: 100%;
+  }
+
+  body .agent-launch-modal > footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  body .agent-launch-footer-actions,
+  body .agent-launch-footer-actions button {
+    width: 100%;
+  }
+}
+
+/* 1.1 compact-density pass
+   Remove repeated chrome and dead space without shrinking the readable type. */
+.app-shell {
+  grid-template:
+    "title title title" 46px
+    "rail workspace trace" minmax(0, 1fr) /
+    232px minmax(0, 1fr) 292px;
+}
+
+.app-shell.trace-collapsed {
+  grid-template-columns: 232px minmax(0, 1fr) 0;
+}
+
+.app-shell.rail-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr) 292px;
+}
+
+.app-shell.rail-collapsed.trace-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr) 0;
+}
+
+.titlebar {
+  min-height: 46px;
+  grid-template-columns: 250px minmax(0, 1fr) auto;
+}
+
+.brand {
+  gap: 7px;
+  padding-left: 9px;
+}
+
+.brand-edition {
+  max-width: 74px;
+  overflow: hidden;
+  padding: 3px 6px;
+  font-size: 8.5px;
+  letter-spacing: .065em;
+  text-overflow: ellipsis;
+}
+
+.kernel-strip {
+  gap: 6px;
+  font-size: 10px;
+}
+
+.title-actions button {
+  width: 38px;
+}
+
+.task-rail {
+  padding: 8px 8px 7px !important;
+}
+
+.task-rail > .new-task {
+  min-height: 38px;
+  padding: 0 11px;
+}
+
+.task-rail > .new-agent-quick {
+  min-height: 32px;
+  margin: 3px 0 5px;
+  padding: 0 11px;
+  font-size: 11.5px;
+}
+
+.rail-heading {
+  padding: 8px 7px 5px;
+}
+
+.task-list {
+  padding: 0 1px 2px 0;
+}
+
+.task-card {
+  min-height: 49px;
+  margin-bottom: 1px;
+  padding: 0;
+  border-radius: 7px;
+}
+
+.task-open {
+  gap: 8px;
+  padding: 7px 34px 7px 8px;
+}
+
+.task-state {
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-width: 1px;
+  box-shadow: 0 0 0 2px rgba(101, 95, 211, .07);
+}
+
+.task-copy {
+  gap: 2px;
+}
+
+.task-copy strong {
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.task-copy small {
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.task-progress {
+  width: 72%;
+  height: 1px;
+  margin-top: 1px;
+}
+
+.task-archive-action {
+  right: 4px;
+  width: 27px;
+  height: 27px;
+}
+
+.rail-footer {
+  padding-top: 4px;
+}
+
+.rail-footer button,
+.rail-footer .archive-button {
+  min-height: 34px;
+  padding: 5px 7px;
+}
+
+.workspace {
+  gap: 7px;
+  padding: 9px 11px 9px;
+}
+
+.workspace-heading {
+  min-height: 43px;
+  align-items: center;
+}
+
+.workspace-heading > div:first-child {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 8px;
+}
+
+.workspace-heading .eyebrow {
+  grid-row: 1;
+  align-self: center;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: var(--nova-accent-soft);
+  font-size: 8.5px;
+  letter-spacing: .06em;
+}
+
+.workspace-heading h1 {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: clamp(22px, 1.75vw, 29px);
+  line-height: 1.04;
+}
+
+.workspace-heading p {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #858d98 !important;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.heading-actions {
+  gap: 2px;
+}
+
+.workspace-chip,
+.trace-toggle {
+  height: 29px;
+}
+
+.threadspace {
+  grid-template-rows: 50px minmax(0, 1fr);
+}
+
+.thread-header {
+  gap: 8px;
+  padding: 0 11px;
+}
+
+.nova-orb {
+  width: 28px;
+  height: 28px;
+}
+
+.nova-orb span {
+  width: 13px;
+  height: 13px;
+}
+
+.thread-header > div:nth-child(2) span {
+  font-size: 10px;
+}
+
+.thread-header > div:nth-child(2) strong {
+  font-size: 10.5px;
+  line-height: 1.25;
+}
+
+.thread-agent-pack {
+  min-height: 29px;
+  padding: 0 9px;
+  font-size: 10.5px;
+}
+
+.message-list {
+  width: min(960px, calc(100% - 22px));
+  padding: 13px 0 28px;
+}
+
+.message {
+  margin-bottom: 12px;
+}
+
+.message.assistant {
+  width: min(94%, 900px);
+  padding: 11px 13px;
+  border-left-width: 2px;
+}
+
+.message.user {
+  padding: 11px 13px;
+}
+
+.message-meta {
+  margin-bottom: 7px;
+}
+
+.delivery-result {
+  gap: 9px;
+  margin-top: 8px;
+  padding: 11px;
+}
+
+.delivery-result-hero {
+  gap: 8px;
+}
+
+.delivery-result-mark {
+  width: 32px;
+  height: 32px;
+}
+
+.delivery-result-hero > div:nth-child(2) {
+  gap: 1px;
+}
+
+.delivery-result-hero strong {
+  font-size: 15px;
+}
+
+.delivery-result-hero span,
+.delivery-result-hero small {
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.delivery-review-open {
+  min-height: 28px;
+  padding: 0 8px;
+}
+
+.trace-panel {
+  padding: 10px 9px 8px;
+}
+
+.trace-heading {
+  padding: 0 2px 7px;
+}
+
+.trace-heading span {
+  font-size: 12px;
+}
+
+.trace-heading small {
+  display: inline;
+  margin-left: 6px;
+  font-size: 9.5px;
+}
+
+.progress-card {
+  margin-bottom: 7px;
+  padding: 9px;
+}
+
+.progress-card h3 {
+  margin: 6px 0 2px;
+}
+
+.progress-card p {
+  display: -webkit-box;
+  margin-bottom: 4px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.context-capsule-panel,
+.task-plan-panel,
+.agent-roster {
+  margin-bottom: 7px;
+}
+
+.agent-roster > header {
+  min-height: 34px;
+  padding: 7px 8px;
+}
+
+.agent-roster summary {
+  min-height: 42px;
+  padding: 6px 8px;
+}
+
+.agent-roster summary > div {
+  gap: 1px;
+}
+
+.agent-roster details > p {
+  margin: 0 8px 7px 25px;
+  font-size: 10px;
+}
+
+.trace-item {
+  min-height: 46px;
+  padding: 7px 3px 7px 18px;
+}
+
+.trace-item p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+@media (max-width: 1440px) {
+  .app-shell,
+  .app-shell.trace-collapsed {
+    grid-template-columns: 224px minmax(0, 1fr) 0;
+  }
+
+  .app-shell.rail-collapsed,
+  .app-shell.rail-collapsed.trace-collapsed {
+    grid-template-columns: 0 minmax(0, 1fr) 0;
+  }
+}
+
+@media (max-width: 1180px) {
+  .task-rail {
+    top: 46px;
+  }
+}
+
+@media (max-width: 760px) {
+  .workspace-heading > div:first-child {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace-heading .eyebrow {
+    display: none;
+  }
+
+  .workspace-heading p {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
+
+@media (max-width: 720px) {
+  body .agent-launch-layer {
+    padding: 10px !important;
+  }
+
+  body .agent-launch-modal {
+    width: calc(100vw - 20px) !important;
+    max-height: calc(100vh - 20px) !important;
+  }
+
+  body .agent-capability-preflight > div,
+  body .agent-launch-outcomes > div {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+/* Final compact workspace overrides. Keep this last so legacy theme layers
+   cannot re-introduce the spacious prototype measurements. */
+.app-shell {
+  grid-template: "title title title" 46px "rail workspace trace" minmax(0, 1fr) / 232px minmax(0, 1fr) 292px;
+}
+
+.app-shell.trace-collapsed { grid-template-columns: 232px minmax(0, 1fr) 0; }
+.app-shell.rail-collapsed { grid-template-columns: 0 minmax(0, 1fr) 292px; }
+.app-shell.rail-collapsed.trace-collapsed { grid-template-columns: 0 minmax(0, 1fr) 0; }
+
+.titlebar {
+  min-height: 46px;
+  grid-template-columns: 250px minmax(0, 1fr) auto;
+}
+
+.brand { gap: 7px; padding-left: 9px; }
+.brand-edition {
+  max-width: 74px;
+  overflow: hidden;
+  padding: 3px 6px;
+  font-size: 8.5px;
+  letter-spacing: .065em;
+  text-overflow: ellipsis;
+}
+.kernel-strip { gap: 6px; font-size: 10px; }
+.title-actions button { width: 38px; }
+
+.task-rail { padding: 8px 8px 7px !important; }
+.task-rail > .new-task { min-height: 38px; padding: 0 11px; }
+.task-rail > .new-agent-quick {
+  min-height: 32px;
+  margin: 3px 0 5px;
+  padding: 0 11px;
+  font-size: 11.5px;
+}
+.rail-heading { padding: 8px 7px 5px; }
+.task-list { padding: 0 1px 2px 0; }
+.task-card {
+  min-height: 49px;
+  margin-bottom: 1px;
+  padding: 0;
+  border-radius: 7px;
+}
+.task-open { gap: 8px; padding: 7px 34px 7px 8px; }
+.task-state {
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-width: 1px;
+  box-shadow: 0 0 0 2px rgba(101, 95, 211, .07);
+}
+.task-copy { gap: 2px; }
+.task-copy strong { font-size: 11.5px; line-height: 1.35; }
+.task-copy small { font-size: 10px; line-height: 1.3; }
+.task-progress { width: 72%; height: 1px; margin-top: 1px; }
+.task-archive-action { right: 4px; width: 27px; height: 27px; }
+.rail-footer { padding-top: 4px; }
+.rail-footer button,
+.rail-footer .archive-button { min-height: 34px; padding: 5px 7px; }
+
+.workspace { gap: 7px; padding: 9px 11px 9px; }
+.workspace-heading { min-height: 43px; align-items: center; }
+.workspace-heading > div:first-child {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 8px;
+}
+.workspace-heading .eyebrow {
+  grid-row: 1;
+  align-self: center;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: var(--nova-accent-soft);
+  font-size: 8.5px;
+  letter-spacing: .06em;
+}
+.workspace-heading h1 {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: clamp(22px, 1.75vw, 29px);
+  line-height: 1.04;
+}
+.workspace-heading p {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #858d98 !important;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.heading-actions { gap: 2px; }
+.workspace-chip,
+.trace-toggle { height: 29px; }
+
+.threadspace { grid-template-rows: 50px minmax(0, 1fr); }
+.thread-header { gap: 8px; padding: 0 11px; }
+.nova-orb { width: 28px; height: 28px; }
+.nova-orb span { width: 13px; height: 13px; }
+.thread-header > div:nth-child(2) span { font-size: 10px; }
+.thread-header > div:nth-child(2) strong { font-size: 10.5px; line-height: 1.25; }
+.thread-agent-pack { min-height: 29px; padding: 0 9px; font-size: 10.5px; }
+
+.message-list { width: min(960px, calc(100% - 22px)); padding: 13px 0 28px; }
+.message { margin-bottom: 12px; }
+.message.assistant {
+  width: min(94%, 900px);
+  padding: 11px 13px;
+  border-left-width: 2px;
+}
+.message.user { padding: 11px 13px; }
+.message-meta { margin-bottom: 7px; }
+
+.delivery-result { gap: 9px; margin-top: 8px; padding: 11px; }
+.delivery-result-hero { gap: 8px; }
+.delivery-result-mark { width: 32px; height: 32px; }
+.delivery-result-hero > div:nth-child(2) { gap: 1px; }
+.delivery-result-hero strong { font-size: 15px; }
+.delivery-result-hero span,
+.delivery-result-hero small { font-size: 10px; line-height: 1.35; }
+.delivery-review-open { min-height: 28px; padding: 0 8px; }
+
+.trace-panel { padding: 10px 9px 8px; }
+.trace-heading { padding: 0 2px 7px; }
+.trace-heading span { font-size: 12px; }
+.trace-heading small { display: inline; margin-left: 6px; font-size: 9.5px; }
+.progress-card { margin-bottom: 7px; padding: 9px; }
+.progress-card h3 { margin: 6px 0 2px; }
+.progress-card p,
+.trace-item p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+.progress-card p { margin-bottom: 4px; }
+.context-capsule-panel,
+.task-plan-panel,
+.agent-roster { margin-bottom: 7px; }
+.agent-roster > header { min-height: 34px; padding: 7px 8px; }
+.agent-roster summary { min-height: 42px; padding: 6px 8px; }
+.agent-roster summary > div { gap: 1px; }
+.agent-roster details > p { margin: 0 8px 7px 25px; font-size: 10px; }
+.trace-item { min-height: 46px; padding: 7px 3px 7px 18px; }
+
+@media (max-width: 1440px) {
+  .app-shell,
+  .app-shell.trace-collapsed { grid-template-columns: 224px minmax(0, 1fr) 0; }
+  .app-shell.rail-collapsed,
+  .app-shell.rail-collapsed.trace-collapsed { grid-template-columns: 0 minmax(0, 1fr) 0; }
+}
+
+@media (max-width: 1180px) {
+  .task-rail { top: 46px; }
+}
+
+@media (max-width: 760px) {
+  .workspace-heading > div:first-child { grid-template-columns: minmax(0, 1fr); }
+  .workspace-heading .eyebrow { display: none; }
+  .workspace-heading p { grid-column: 1; grid-row: auto; }
+}
+
+/* Agent onboarding belongs to the same calm document workspace as the rest of
+   NOVA. The original dark console treatment made the modal look like a black
+   screen on the light Windows/macOS shell. Keep this as the final theme layer
+   so older pack-specific rules cannot bring the retired palette back. */
+.agent-launch-layer {
+  background: rgba(37, 43, 52, .18) !important;
+  backdrop-filter: blur(5px);
+}
+
+.agent-launch-modal {
+  width: min(920px, calc(100vw - 40px));
+  max-height: min(860px, calc(100vh - 40px));
+  border: 1px solid #dfe3e8 !important;
+  border-radius: 16px;
+  background: #ffffff !important;
+  color: var(--ink) !important;
+  box-shadow: 0 24px 72px rgba(30, 36, 44, .16) !important;
+}
+
+.agent-launch-modal > header {
+  border-bottom-color: #e6e9ed !important;
+  background: #ffffff !important;
+}
+
+.agent-launch-symbol,
+.agent-launch-step-number,
+.agent-capability-kind {
+  border-color: #daddf0 !important;
+  background: var(--nova-accent-soft) !important;
+  color: var(--nova-accent) !important;
+}
+
+.agent-launch-modal > header span,
+.agent-launch-outcomes > header span,
+.agent-capability-preflight > header span {
+  color: var(--nova-accent) !important;
+}
+
+.agent-launch-modal > header h2,
+.agent-launch-step-content > header strong,
+.agent-launch-outcomes > header strong,
+.agent-capability-preflight > header strong,
+.agent-capability-preflight article strong,
+.agent-launch-outcomes button strong {
+  color: var(--ink-strong) !important;
+}
+
+.agent-launch-modal > header p,
+.agent-launch-step-content > p,
+.agent-launch-step-content details p,
+.agent-launch-step-content details small,
+.agent-launch-outcomes > header small,
+.agent-capability-preflight > header small,
+.agent-capability-preflight article p,
+.agent-capability-preflight article small,
+.agent-launch-outcomes button span,
+.agent-launch-modal > footer {
+  color: var(--ink-muted) !important;
+}
+
+.agent-launch-modal > header > button,
+.agent-launch-modal > footer button,
+.agent-capability-preflight article button {
+  border-color: #dce1e7 !important;
+  background: #f8f9fb !important;
+  color: #59626e !important;
+}
+
+.agent-launch-capability,
+.agent-capability-preflight,
+.agent-launch-outcomes,
+.agent-launch-modal > footer {
+  border-color: #e6e9ed !important;
+  background: #f8f9fb !important;
+}
+
+.agent-capability-preflight article,
+.agent-capability-preflight article.ready,
+.agent-launch-step,
+.agent-launch-outcomes button,
+.agent-launch-outcomes button.recommended {
+  border-color: #e0e4e9 !important;
+  background: #ffffff !important;
+  color: var(--ink) !important;
+  box-shadow: 0 1px 2px rgba(27, 32, 39, .025);
+}
+
+.agent-capability-preflight article.ready {
+  border-left: 3px solid #65a982 !important;
+}
+
+.agent-launch-steps {
+  grid-template-columns: minmax(0, 1fr);
+  background: #ffffff !important;
+}
+
+.agent-launch-step-content textarea,
+.agent-launch-step-content select {
+  border-color: #d9dee5 !important;
+  background: #ffffff !important;
+  color: var(--ink) !important;
+}
+
+.agent-launch-step-content textarea::placeholder {
+  color: #9ca4ae !important;
+}
+
+.agent-launch-step-content textarea:focus,
+.agent-launch-step-content select:focus {
+  border-color: #8795dd !important;
+  outline: 3px solid rgba(92, 112, 214, .10);
+}
+
+.agent-launch-attachment button {
+  border-color: #cfd5e1 !important;
+  background: #f8f9fc !important;
+  color: #5364bf !important;
+}
+
+.agent-launch-step-content summary,
+.agent-launch-outcomes button b {
+  color: #5b67b6 !important;
+}
+
+.agent-launch-outcomes > div {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.agent-launch-outcomes button:hover,
+.agent-launch-outcomes button.recommended {
+  border-color: #c9ceeb !important;
+  background: #f7f7fd !important;
+}
+
+.agent-launch-error {
+  border-color: #efd0ca !important;
+  background: #fff5f3 !important;
+  color: #9b4b3f !important;
+}
+
+.retained-task-materials {
+  max-width: 170px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  color: #5964b5;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .agent-launch-layer {
+    padding: 10px;
+  }
+
+  .agent-launch-modal {
+    width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+  }
+
+  .agent-capability-preflight > div,
+  .agent-launch-outcomes > div {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -12168,4 +13281,270 @@ select:focus-visible {
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
   }
+}
+
+/* Agent launch must remain a light work surface. This rule is intentionally
+   last because older Agent Pack skins above still contain dark declarations. */
+body .agent-launch-layer {
+  background: rgba(35, 41, 50, .16) !important;
+  backdrop-filter: blur(5px) !important;
+}
+
+body .agent-launch-modal {
+  width: min(920px, calc(100vw - 40px)) !important;
+  max-height: min(860px, calc(100vh - 40px)) !important;
+  border: 1px solid #dfe3e8 !important;
+  border-radius: 16px !important;
+  background: #ffffff !important;
+  color: #2a3038 !important;
+  box-shadow: 0 24px 72px rgba(30, 36, 44, .16) !important;
+}
+
+body .agent-launch-modal > header,
+body .agent-launch-steps,
+body .agent-launch-capability,
+body .agent-capability-preflight,
+body .agent-launch-outcomes,
+body .agent-launch-modal > footer {
+  border-color: #e5e8ec !important;
+  background: #ffffff !important;
+}
+
+body .agent-capability-preflight,
+body .agent-launch-outcomes {
+  background: #f8f9fb !important;
+}
+
+body .agent-launch-modal > header h2,
+body .agent-launch-step-content > header strong,
+body .agent-launch-outcomes > header strong,
+body .agent-capability-preflight > header strong,
+body .agent-capability-preflight article strong,
+body .agent-launch-outcomes button strong {
+  color: #2a3038 !important;
+}
+
+body .agent-launch-modal > header p,
+body .agent-launch-step-content > p,
+body .agent-launch-step-content details p,
+body .agent-launch-step-content details small,
+body .agent-launch-outcomes > header small,
+body .agent-capability-preflight > header small,
+body .agent-capability-preflight article p,
+body .agent-capability-preflight article small,
+body .agent-launch-outcomes button span,
+body .agent-launch-modal > footer,
+body .agent-launch-attachment small {
+  color: #7b8490 !important;
+}
+
+body .agent-launch-modal > header span,
+body .agent-launch-outcomes > header span,
+body .agent-capability-preflight > header span,
+body .agent-launch-step-content > header span,
+body .agent-launch-step-content summary,
+body .agent-launch-outcomes button b {
+  color: #5d6ed0 !important;
+}
+
+body .agent-launch-symbol,
+body .agent-launch-step-number,
+body .agent-capability-kind {
+  border-color: #daddf0 !important;
+  background: #f0effc !important;
+  color: #5d60ca !important;
+}
+
+body .agent-capability-preflight article,
+body .agent-capability-preflight article.ready,
+body .agent-launch-step,
+body .agent-launch-outcomes button,
+body .agent-launch-outcomes button.recommended {
+  border-color: #dfe3e8 !important;
+  background: #ffffff !important;
+  color: #2a3038 !important;
+  box-shadow: 0 1px 2px rgba(27, 32, 39, .025) !important;
+}
+
+body .agent-capability-preflight article.ready {
+  border-left: 3px solid #65a982 !important;
+}
+
+body .agent-launch-steps {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+body .agent-launch-step-content textarea,
+body .agent-launch-step-content select {
+  border-color: #d9dee5 !important;
+  background: #ffffff !important;
+  color: #2a3038 !important;
+}
+
+body .agent-launch-step-content textarea::placeholder {
+  color: #9ca4ae !important;
+}
+
+body .agent-launch-step-content textarea:focus,
+body .agent-launch-step-content select:focus {
+  border-color: #8795dd !important;
+  outline: 3px solid rgba(92, 112, 214, .10) !important;
+}
+
+body .agent-launch-attachment button,
+body .agent-launch-modal > header > button,
+body .agent-launch-modal > footer button,
+body .agent-capability-preflight article button {
+  border-color: #d8dde4 !important;
+  background: #f7f8fa !important;
+  color: #5664bd !important;
+}
+
+body .agent-launch-outcomes > div {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+body .agent-launch-outcomes button:hover,
+body .agent-launch-outcomes button.recommended {
+  border-color: #c9ceeb !important;
+  background: #f7f7fd !important;
+}
+
+body .agent-launch-error {
+  border-color: #efd0ca !important;
+  background: #fff5f3 !important;
+  color: #9b4b3f !important;
+}
+
+@media (max-width: 720px) {
+  body .agent-launch-layer {
+    padding: 10px !important;
+  }
+
+  body .agent-launch-modal {
+    width: calc(100vw - 20px) !important;
+    max-height: calc(100vh - 20px) !important;
+  }
+
+  body .agent-capability-preflight > div,
+  body .agent-launch-outcomes > div {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+.approval-risk-warning {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid #f2c6bf;
+  border-radius: 12px;
+  background: #fff7f5;
+  color: #7b3329;
+}
+
+.approval-risk-warning span {
+  font-size: 12px;
+  color: #956057;
+}
+
+.workspace-permissions-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.permission-boundary-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line, #dfe3ea);
+  border-radius: 16px;
+  background: #f7f9fc;
+}
+
+.permission-boundary-card > div {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+}
+
+.permission-boundary-card small,
+.workspace-permission-list small {
+  color: var(--muted, #77808e);
+}
+
+.workspace-permission-list {
+  display: grid;
+  gap: 10px;
+}
+
+.workspace-permission-list article {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--line, #dfe3ea);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.workspace-permission-list article > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  flex: 1;
+}
+
+.workspace-permission-list code {
+  width: fit-content;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: #eef1f7;
+  color: #4d5b72;
+}
+/* Renderer failures must remain recoverable instead of exposing an empty
+   Electron surface. This screen deliberately uses the regular NOVA palette. */
+.renderer-recovery {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: #f6f7f9;
+  color: #202530;
+  font-family: Inter, "Microsoft YaHei UI", "PingFang SC", sans-serif;
+}
+
+.renderer-recovery section {
+  width: min(580px, 100%);
+  padding: 36px;
+  border: 1px solid #dde1e8;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 18px 55px rgb(28 35 48 / 10%);
+}
+
+.renderer-recovery-mark {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 22px;
+  border-radius: 13px;
+  background: #626fdf;
+  color: #fff;
+  font-weight: 800;
+}
+
+.renderer-recovery h1 { margin: 6px 0 12px; font-size: 28px; }
+.renderer-recovery p { color: #697386; line-height: 1.7; }
+.renderer-recovery details { margin-top: 20px; color: #697386; }
+.renderer-recovery pre { overflow: auto; padding: 12px; border-radius: 10px; background: #f3f5f8; }
+.renderer-recovery button {
+  margin-top: 24px;
+  padding: 11px 18px;
+  border: 0;
+  border-radius: 10px;
+  background: #626fdf;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
 }

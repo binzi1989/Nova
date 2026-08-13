@@ -35,7 +35,7 @@
 </p>
 
 > [!IMPORTANT]
-> The latest preview is `1.1.0-preview.15`. Installers are not yet signed and automatic updates remain disabled by default. Use [GitHub Releases](https://github.com/binzi1989/Nova/releases) as the source of public builds. NOVA has a complete product foundation, but it is still being validated on real tasks and across platforms. Passing local tests is not presented as GA readiness.
+> The latest preview is `1.1.0-preview.17`. Installers are not yet signed and automatic updates remain disabled by default. Use [GitHub Releases](https://github.com/binzi1989/Nova/releases) as the source of public builds. NOVA has a complete product foundation, but it is still being validated on real tasks and across platforms. Passing local tests is not presented as GA readiness.
 
 ## Product preview
 
@@ -55,11 +55,14 @@
 
 ## This preview
 
+- **Interruptible in-flight work:** corrections such as “stop here” or “change direction” now preempt the active cancellable step and resume automatically on the same durable task, workspace, and context.
+- **Safer cancellation and recovery:** late provider responses cannot overwrite a newer direction; task snapshots, attachments, written files, and stage outputs remain available.
 - **A more reliable Agent Workshop:** every design agent's stage output is persisted. NOVA repairs incomplete structures locally first and makes at most one bounded model-repair request when the response cannot be parsed, avoiding another full-token run.
 - **Real work survives imperfect formatting:** recoverable drafts remain available for human review instead of discarding an entire orchestration because the coordinator returned malformed JSON.
 - **Practical document input:** Word, PDF, and common text attachments share one extraction path, with explicit diagnostics when content cannot be read safely.
 - **More complete Agent Packs:** unique generated IDs, safe removal, industry templates, onboarding, capability requirements, and durable build tasks follow the Agent Creation Standard.
-- **Verified Windows build:** the Electron client, AgentOS Bridge, Workshop recovery smoke test, and production build all pass.
+- **Clearer workspace, permission, MCP, and browser behavior:** writable-directory checks, bounded persistent grants, task-aware capability preparation, and recovery paths reduce avoidable stalls.
+- **A lighter cross-platform shell:** Windows and macOS share the Electron interaction layer while task navigation, execution status, delivery review, and Agent onboarding continue to remove visual noise.
 
 ## What is NOVA?
 

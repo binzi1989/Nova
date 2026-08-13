@@ -19,8 +19,11 @@ contextBridge.exposeInMainWorld("nova", {
     submitDeliveryFeedback: (request) => invoke("nova:submit-delivery-feedback", request),
     acceptDelivery: (request) => invoke("nova:accept-delivery", request),
     selectWorkspace: () => invoke("nova:select-workspace"),
+    checkWorkspaceAccess: (request) => invoke("nova:check-workspace-access", request),
     selectAttachments: () => invoke("nova:select-attachments"),
+    previewAttachment: (request) => invoke("nova:preview-attachment", request),
     desktopSnapshot: () => invoke("nova:desktop-snapshot"),
+    reportRendererError: (request) => invoke("nova:report-renderer-error", request),
     onContextEvent: (listener) => {
       const handler = (_event, payload) => listener(payload);
       ipcRenderer.on("nova:context-event", handler);
@@ -43,11 +46,17 @@ contextBridge.exposeInMainWorld("nova", {
       return () => ipcRenderer.removeListener("nova:tool-approval-request", handler);
     }
   },
+  permissions: {
+    list: () => invoke("nova:list-workspace-permissions"),
+    revoke: (request) => invoke("nova:revoke-workspace-permission", request),
+    clear: (request) => invoke("nova:clear-workspace-permissions", request)
+  },
   capabilities: {
     list: (request) => invoke("nova:list-capabilities", request),
     setMcpEnabled: (request) => invoke("nova:set-mcp-enabled", request),
     setSkillEnabled: (request) => invoke("nova:set-skill-enabled", request),
     install: (request) => invoke("nova:install-capability", request),
+    authorizeAgentCapabilities: (request) => invoke("nova:authorize-agent-capabilities", request),
     searchStore: (request) => invoke("nova:search-capability-store", request),
     installStore: (request) => invoke("nova:install-store-capability", request),
     discoverMcp: (request) => invoke("nova:discover-mcp", request),

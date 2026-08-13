@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Net.Http;
 using System.Text.Json;
@@ -32,6 +33,9 @@ public sealed class McpRegistryService
     private readonly string _configPath;
     private readonly HttpClient _httpClient;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly ConcurrentDictionary<string, SessionEntry> _sessions =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan ToolCatalogTtl = TimeSpan.FromMinutes(2);
 
     public McpRegistryService(string? configPath = null, HttpClient? httpClient = null)
     {
@@ -71,6 +75,7 @@ public sealed class McpRegistryService
             }
 
             await SaveServersAsync(servers, cancellationToken);
+            await InvalidateSessionsAsync(registration.Name);
         }
         finally
         {
@@ -93,6 +98,7 @@ public sealed class McpRegistryService
 
             servers[index] = servers[index] with { Enabled = enabled };
             await SaveServersAsync(servers, cancellationToken);
+            await InvalidateSessionsAsync(name);
         }
         finally
         {
@@ -114,6 +120,7 @@ public sealed class McpRegistryService
             }
 
             await SaveServersAsync(servers, cancellationToken);
+            await InvalidateSessionsAsync(name);
         }
         finally
         {
@@ -152,14 +159,35 @@ public sealed class McpRegistryService
         CancellationToken cancellationToken)
     {
         var server = FindEnabledServer(serverName);
-        await using var client = await ConnectAsync(server, workspaceRoot, cancellationToken);
-        var result = await client.ListToolsAsync(cancellationToken);
-        return JsonSerializer.Serialize(new
+        var entry = GetSessionEntry(server, workspaceRoot);
+        await entry.Gate.WaitAsync(cancellationToken);
+        try
         {
-            server = server.Name,
-            tools = result["tools"]?.DeepClone() ?? new JsonArray(),
-            next_cursor = result["nextCursor"]?.DeepClone()
-        });
+            if (entry.ToolCatalog is null
+                || DateTimeOffset.UtcNow - entry.ToolCatalogUpdatedAt >= ToolCatalogTtl)
+            {
+                var client = await EnsureConnectedAsync(entry, cancellationToken);
+                entry.ToolCatalog = (await client.ListToolsAsync(cancellationToken)).DeepClone().AsObject();
+                entry.ToolCatalogUpdatedAt = DateTimeOffset.UtcNow;
+            }
+
+            var result = entry.ToolCatalog;
+            return JsonSerializer.Serialize(new
+            {
+                server = server.Name,
+                tools = result?["tools"]?.DeepClone() ?? new JsonArray(),
+                next_cursor = result?["nextCursor"]?.DeepClone()
+            });
+        }
+        catch
+        {
+            await DropConnectionAsync(entry);
+            throw;
+        }
+        finally
+        {
+            entry.Gate.Release();
+        }
     }
 
     public async Task<string> CallToolAsync(
@@ -175,14 +203,104 @@ public sealed class McpRegistryService
         }
 
         var server = FindEnabledServer(serverName);
-        await using var client = await ConnectAsync(server, workspaceRoot, cancellationToken);
-        var result = await client.CallToolAsync(toolName, arguments, cancellationToken);
-        return new JsonObject
+        var entry = GetSessionEntry(server, workspaceRoot);
+        await entry.Gate.WaitAsync(cancellationToken);
+        try
         {
-            ["server"] = server.Name,
-            ["tool"] = toolName,
-            ["result"] = result.DeepClone()
-        }.ToJsonString();
+            var client = await EnsureConnectedAsync(entry, cancellationToken);
+            var result = await client.CallToolAsync(toolName, arguments, cancellationToken);
+            return new JsonObject
+            {
+                ["server"] = server.Name,
+                ["tool"] = toolName,
+                ["result"] = result.DeepClone()
+            }.ToJsonString();
+        }
+        catch
+        {
+            // Never replay a failed tool call automatically: it may already have produced
+            // an external side effect. Drop the broken session so the next explicit call
+            // reconnects without duplicating this operation.
+            await DropConnectionAsync(entry);
+            throw;
+        }
+        finally
+        {
+            entry.Gate.Release();
+        }
+    }
+
+    private SessionEntry GetSessionEntry(McpServerRegistration server, string workspaceRoot)
+    {
+        var normalizedWorkspace = Path.GetFullPath(workspaceRoot);
+        var key = $"{server.Name}\0{normalizedWorkspace}";
+        return _sessions.GetOrAdd(
+            key,
+            _ => new SessionEntry(server.Name, server, normalizedWorkspace));
+    }
+
+    private async Task<IMcpClientSession> EnsureConnectedAsync(
+        SessionEntry entry,
+        CancellationToken cancellationToken)
+    {
+        if (entry.Client is { IsAlive: true })
+        {
+            return entry.Client;
+        }
+
+        await DropConnectionAsync(entry);
+        entry.Client = await ConnectAsync(entry.Registration, entry.WorkspaceRoot, cancellationToken);
+        return entry.Client;
+    }
+
+    private static async Task DropConnectionAsync(SessionEntry entry)
+    {
+        var client = entry.Client;
+        entry.Client = null;
+        entry.ToolCatalog = null;
+        entry.ToolCatalogUpdatedAt = default;
+        if (client is not null)
+        {
+            await client.DisposeAsync();
+        }
+    }
+
+    private async Task InvalidateSessionsAsync(string serverName)
+    {
+        var matches = _sessions
+            .Where(pair => pair.Value.ServerName.Equals(serverName, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        foreach (var (key, entry) in matches)
+        {
+            if (!_sessions.TryRemove(key, out _))
+            {
+                continue;
+            }
+
+            await entry.Gate.WaitAsync();
+            try
+            {
+                await DropConnectionAsync(entry);
+            }
+            finally
+            {
+                entry.Gate.Release();
+            }
+        }
+    }
+
+    private sealed class SessionEntry(
+        string serverName,
+        McpServerRegistration registration,
+        string workspaceRoot)
+    {
+        public string ServerName { get; } = serverName;
+        public McpServerRegistration Registration { get; } = registration;
+        public string WorkspaceRoot { get; } = workspaceRoot;
+        public SemaphoreSlim Gate { get; } = new(1, 1);
+        public IMcpClientSession? Client { get; set; }
+        public JsonObject? ToolCatalog { get; set; }
+        public DateTimeOffset ToolCatalogUpdatedAt { get; set; }
     }
 
     private McpServerRegistration FindEnabledServer(string name)

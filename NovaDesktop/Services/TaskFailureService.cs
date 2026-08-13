@@ -74,11 +74,11 @@ public static class TaskFailureClassifier
             return Create(
                 taskId,
                 TaskFailureKind.Permission,
-                "WORKSPACE_ACCESS_DENIED",
-                "工作区权限不足",
+                "FILE_ACCESS_DENIED",
+                "文件访问被系统拒绝",
                 message,
                 FailureRecoveryAction.ReviewPermission,
-                "检查文件权限或重新选择可写工作区",
+                "查看被拒绝的具体路径；工作区本身不一定有问题",
                 retryable: true,
                 blocksReplay: false,
                 normalizedStage,
@@ -178,7 +178,37 @@ public static class TaskFailureClassifier
                 normalizedStage,
                 exception);
         }
-        if (ContainsAny(searchable, "permission", "approval", "denied", "unauthorized", "权限", "授权", "拒绝"))
+        if (ContainsAny(searchable, "401", "403", "unauthorized", "invalid api key", "authentication", "forbidden", "鉴权", "凭据", "令牌"))
+        {
+            return Create(
+                taskId,
+                TaskFailureKind.Model,
+                "MODEL_AUTH_REJECTED",
+                "模型或外部服务凭据未通过验证",
+                message,
+                FailureRecoveryAction.ReconnectModel,
+                "检查 API Key、登录状态或 MCP 凭据后继续",
+                retryable: true,
+                blocksReplay: false,
+                normalizedStage,
+                exception);
+        }
+        if (ContainsAny(searchable, "access to the path is denied", "eacces", "eperm"))
+        {
+            return Create(
+                taskId,
+                TaskFailureKind.Tool,
+                "FILE_ACCESS_DENIED",
+                "单个文件或目录访问被拒绝",
+                message,
+                FailureRecoveryAction.Retry,
+                "查看具体路径、占用状态或系统保护策略后继续",
+                retryable: true,
+                blocksReplay: false,
+                normalizedStage,
+                exception);
+        }
+        if (ContainsAny(searchable, "permission boundary", "approval", "not approved", "权限边界", "权限请求", "授权", "拒绝授权"))
         {
             return Create(
                 taskId,
